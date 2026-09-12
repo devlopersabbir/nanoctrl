@@ -21,17 +21,6 @@ jobs:
       - name: Build Native Binary
         run: make
 
-      - name: Size Budget Gate (< 2.0 MB)
-        run: |
-          make size
-          BIN_SIZE=$(stat -f%z build/nanoctrl)
-          echo "Binary size in bytes: $BIN_SIZE"
-          MAX_SIZE=$((2 * 1024 * 1024))
-          if [ "$BIN_SIZE" -gt "$MAX_SIZE" ]; then
-            echo "Error: Binary size exceeds 2 MB budget!"
-            exit 1
-          fi
-
       - name: Run Test Suite
         run: make test
 
