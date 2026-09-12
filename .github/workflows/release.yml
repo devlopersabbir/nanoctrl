@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag to release (e.g. v0.1.0)'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Release
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Version and Tag
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="$(cat VERSION | tr -d '\n\r')"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          echo "Releasing: Tag '${TAG}', VERSION file '${VERSION}'"
+          if [ "${TAG}" != "v${VERSION}" ]; then
+            echo "::error::Tag '${TAG}' does not match VERSION 'v${VERSION}'! Strict versioning violated."
+            exit 1
+          fi
+
+      - name: Run Test Suite
+        run: make test
+
+      - name: Build Multi-Architecture Binaries
+        run: |
+          make universal
+          make arm64
+          make x86_64
+
+      - name: Package Release Assets
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          mkdir -p dist
+
+          # 1. Universal binary archive
+          mkdir -p pkg-universal
+          cp build/nanoctrl-universal pkg-universal/nanoctrl
+          cp README.md pkg-universal/
+          tar -czf "dist/nanoctrl-${TAG}-macos-universal.tar.gz" -C pkg-universal nanoctrl README.md
+
+          # 2. Apple Silicon (arm64) archive
+          mkdir -p pkg-arm64
+          cp build/nanoctrl-arm64 pkg-arm64/nanoctrl
+          cp README.md pkg-arm64/
+          tar -czf "dist/nanoctrl-${TAG}-macos-arm64.tar.gz" -C pkg-arm64 nanoctrl README.md
+
+          # 3. Intel (x86_64) archive
+          mkdir -p pkg-x86_64
+          cp build/nanoctrl-x86_64 pkg-x86_64/nanoctrl
+          cp README.md pkg-x86_64/
+          tar -czf "dist/nanoctrl-${TAG}-macos-x86_64.tar.gz" -C pkg-x86_64 nanoctrl README.md
+
+          # 4. Checksums
+          cd dist
+          shasum -a 256 nanoctrl-*.tar.gz > SHA256SUMS.txt
+          cd ..
+
+          ls -lh dist/
+
+      - name: Generate Release Notes
+        id: notes
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          SIZE_UNIV=$(ls -lh dist/nanoctrl-${TAG}-macos-universal.tar.gz | awk '{print $5}')
+          SIZE_ARM=$(ls -lh dist/nanoctrl-${TAG}-macos-arm64.tar.gz | awk '{print $5}')
+          SIZE_INTEL=$(ls -lh dist/nanoctrl-${TAG}-macos-x86_64.tar.gz | awk '{print $5}')
+
+          cat << 'EOF' > release_notes.md
+          ## NANOCTRL ${{ steps.vars.outputs.tag }}
+
+          > **Tiny Remote Control, Nothing Else.**
+
+          ### Downloads & Packages
+          | Package | Target Architecture | Archive Size |
+          |---|---|---|
+          | `nanoctrl-${{ steps.vars.outputs.tag }}-macos-universal.tar.gz` | **Universal** (Apple Silicon + Intel) | ${SIZE_UNIV} |
+          | `nanoctrl-${{ steps.vars.outputs.tag }}-macos-arm64.tar.gz` | **Apple Silicon** (M1/M2/M3/M4) | ${SIZE_ARM} |
+          | `nanoctrl-${{ steps.vars.outputs.tag }}-macos-x86_64.tar.gz` | **Intel x86_64** | ${SIZE_INTEL} |
+
+          ### Verification & Checksums
+          Refer to `SHA256SUMS.txt` attached to this release for integrity verification.
+          All automated tests (`make test`) passed with zero 3rd-party dependencies.
+          EOF
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: NANOCTRL ${{ steps.vars.outputs.tag }}
+          body_path: release_notes.md
+          files: |
+            dist/*
+          draft: false
+          prerelease: false

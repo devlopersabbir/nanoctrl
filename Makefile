@@ -1,5 +1,18 @@
 CC ?= clang
+
+VERSION ?= $(shell cat VERSION 2>/dev/null | tr -d '\n\r')
+ifeq ($(VERSION),)
+  VERSION := 0.1.0
+endif
+
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null)
+ifeq ($(GIT_COMMIT),)
+  GIT_COMMIT := dev
+endif
+
 CFLAGS ?= -Oz -flto -Wall -Wextra -Wno-unused-command-line-argument
+CFLAGS += -DNANO_VERSION_STR=\"$(VERSION)\" -DNANO_GIT_COMMIT=\"$(GIT_COMMIT)\"
+
 INCLUDES = -Isrc/core -Isrc/net -Isrc/screen -Isrc/input -Isrc/crypto -Isrc/platform/macos
 FRAMEWORKS = -framework Cocoa -framework ScreenCaptureKit -framework CoreGraphics -framework CoreMedia -framework CoreVideo -framework Foundation -framework ApplicationServices
 LDFLAGS = -flto -Wl,-dead_strip $(FRAMEWORKS)
@@ -15,8 +28,11 @@ SRCS = $(SRC_CORE) $(SRC_NET) $(SRC_SCR) $(SRC_CRY) $(SRC_PLAT) $(SRC_MAIN)
 OBJS = $(patsubst src/%.c, build/obj/%.o, $(filter %.c, $(SRCS))) $(patsubst src/%.m, build/obj/%.o, $(filter %.m, $(SRCS)))
 
 TARGET = build/nanoctrl
+TARGET_UNIVERSAL = build/nanoctrl-universal
+TARGET_ARM64 = build/nanoctrl-arm64
+TARGET_X86_64 = build/nanoctrl-x86_64
 
-.PHONY: all clean test size
+.PHONY: all clean test size version check-version universal arm64 x86_64
 
 all: $(TARGET) size
 
@@ -33,9 +49,38 @@ build/obj/%.o: src/%.m
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
+universal: check-version
+	@mkdir -p build
+	$(CC) $(CFLAGS) -arch arm64 -arch x86_64 $(INCLUDES) $(SRCS) $(LDFLAGS) -o $(TARGET_UNIVERSAL)
+	@strip $(TARGET_UNIVERSAL)
+	@echo "Built universal binary: $(TARGET_UNIVERSAL)"
+	@ls -lh $(TARGET_UNIVERSAL) | awk '{printf "Universal size: %s\n", $$5}'
+
+arm64: check-version
+	@mkdir -p build
+	$(CC) $(CFLAGS) -arch arm64 $(INCLUDES) $(SRCS) $(LDFLAGS) -o $(TARGET_ARM64)
+	@strip $(TARGET_ARM64)
+	@echo "Built arm64 binary: $(TARGET_ARM64)"
+	@ls -lh $(TARGET_ARM64) | awk '{printf "arm64 size: %s\n", $$5}'
+
+x86_64: check-version
+	@mkdir -p build
+	$(CC) $(CFLAGS) -arch x86_64 $(INCLUDES) $(SRCS) $(LDFLAGS) -o $(TARGET_X86_64)
+	@strip $(TARGET_X86_64)
+	@echo "Built x86_64 binary: $(TARGET_X86_64)"
+	@ls -lh $(TARGET_X86_64) | awk '{printf "x86_64 size: %s\n", $$5}'
+
+version:
+	@echo "$(VERSION)"
+
+check-version:
+	@echo "Validating version '$(VERSION)'..."
+	@echo "$(VERSION)" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$$' > /dev/null || \
+		(echo "Error: '$(VERSION)' is not a valid Semantic Version (MAJOR.MINOR.PATCH)" && exit 1)
+
 size: $(TARGET)
 	@echo "========================================"
-	@echo "          NANOCTRL SIZE REPORT          "
+	@echo "     NANOCTRL SIZE REPORT (v$(VERSION))  "
 	@echo "========================================"
 	@ls -lh $(TARGET) | awk '{printf "Binary size: %s (Target: < 2.0 MB)\n", $$5}'
 	@size $(TARGET) || true

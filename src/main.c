@@ -5,6 +5,7 @@
 #include "platform/macos/ui_mac.h"
 #include "input/input.h"
 #include "screen/capture.h"
+#include "core/version.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,14 +75,20 @@ static void cli_frame_update(nano_session_t *s, const nano_frame_t *frame, void 
     }
 }
 
+static void print_version(void) {
+    printf("NANOCTRL v%s (commit: %s, arch: %s)\n",
+           nano_version_string(), nano_git_commit(), nano_build_arch());
+}
+
 static void print_usage(const char *prog) {
-    printf("NANOCTRL - Tiny Remote Control, Nothing Else.\n\n");
+    printf("NANOCTRL v%s - Tiny Remote Control, Nothing Else.\n\n", nano_version_string());
     printf("Usage:\n");
     printf("  %s                              Launch native macOS GUI\n", prog);
     printf("  %s --host [port] [--pin 123456] [--cli] [--auto-accept]\n", prog);
     printf("  %s --controller <host:port> <pin> [--cli]\n", prog);
     printf("  %s --test                       Run built-in self-diagnostics\n", prog);
-    printf("  %s --help                       Show this help\n", prog);
+    printf("  %s --version, -v                Print version information\n", prog);
+    printf("  %s --help, -h                   Show this help\n", prog);
 }
 
 static int run_cli_host(uint16_t port, const char *custom_pin) {
@@ -259,6 +266,9 @@ int main(int argc, char *argv[]) {
             g_auto_accept = true;
         } else if (strcmp(argv[i], "--test") == 0) {
             return run_diagnostics();
+        } else if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
+            print_version();
+            return 0;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             return 0;
