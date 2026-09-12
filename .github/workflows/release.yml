@@ -124,6 +124,11 @@ jobs:
           - **Hardened Runtime**: Signed with Apple Hardened Runtime and entitlements.
           - **TCC Metadata**: Includes explicit `NSScreenCaptureUsageDescription` and `NSAccessibilityUsageDescription`.
           - **Checksums**: Verify with `SHA256SUMS.txt`.
+
+          ### First Launch on macOS (Gatekeeper)
+          When opening for the first time on macOS:
+          - **Right-click** `NANOCTRL.app` in Finder -> click **Open** -> click **Open** in the dialog (or go to **System Settings > Privacy & Security** and click **"Open Anyway"**).
+          - Or run: `xattr -cr /Applications/NANOCTRL.app`
           EOF
 
       - name: Publish GitHub Release

@@ -98,10 +98,28 @@ Self-diagnostics:
 ./build/nanoctrl --test
 ```
 
+## macOS First Launch & Gatekeeper
+
+When you download NANOCTRL from the web or GitHub, macOS Gatekeeper may show:
+> *"Apple could not verify NANOCTRL is free of malware..."*
+
+This is standard macOS behavior for open-source software built outside the paid Apple Developer Program. To open it:
+
+* **Method 1 (Quick GUI)**:
+  1. **Right-click** (or Control-click) `NANOCTRL.app` in Finder or `/Applications`.
+  2. Click **Open** from the context menu.
+  3. Click **Open** in the confirmation alert. (You only need to do this once).
+  *(Alternatively, open **System Settings > Privacy & Security** and click **"Open Anyway"**)*.
+
+* **Method 2 (Terminal)**:
+  ```bash
+  xattr -cr /Applications/NANOCTRL.app
+  ```
+
 ---
 
 ## macOS Permissions
 
-macOS requires permissions for remote control:
+macOS requires two permissions for remote control:
 - **Screen Recording**: Required to capture display frames. (System Settings > Privacy & Security > Screen Recording). If not enabled, NANOCTRL falls back to a synthetic animated test pattern for testing.
 - **Accessibility**: Required to inject mouse and keyboard input events. (System Settings > Privacy & Security > Accessibility).
