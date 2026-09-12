@@ -38,7 +38,14 @@ NANOCTRL is an ultra-lightweight, zero-dependency, native remote-control applica
 Requires Xcode Command Line Tools (`clang` and macOS SDK).
 
 ```bash
+# Build native CLI binary
 make
+
+# Build universal macOS application bundle (NANOCTRL.app)
+make bundle
+
+# Package distributable disk image (NANOCTRL.dmg)
+make dmg
 ```
 
 To run the automated test suite (protocol framing, tile diffing, RLE compression, and network loopback integration):

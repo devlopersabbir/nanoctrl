@@ -46,38 +46,48 @@ jobs:
       - name: Run Test Suite
         run: make test
 
-      - name: Build Multi-Architecture Binaries
+      - name: Build Multi-Architecture Binaries & macOS App Bundle
         run: |
           make universal
           make arm64
           make x86_64
+          make bundle
+          make dmg
 
       - name: Package Release Assets
         run: |
           TAG="${{ steps.vars.outputs.tag }}"
           mkdir -p dist
 
-          # 1. Universal binary archive
+          # 1. Distributable Disk Image (.dmg)
+          cp "build/NANOCTRL-v${{ steps.vars.outputs.version }}.dmg" "dist/NANOCTRL-${TAG}-macos.dmg"
+
+          # 2. Signed Application Bundle (.app.zip)
+          cd build
+          zip -r -y "../dist/NANOCTRL-${TAG}-macos.app.zip" NANOCTRL.app
+          cd ..
+
+          # 3. Universal binary archive (CLI)
           mkdir -p pkg-universal
           cp build/nanoctrl-universal pkg-universal/nanoctrl
           cp README.md pkg-universal/
           tar -czf "dist/nanoctrl-${TAG}-macos-universal.tar.gz" -C pkg-universal nanoctrl README.md
 
-          # 2. Apple Silicon (arm64) archive
+          # 4. Apple Silicon (arm64) archive (CLI)
           mkdir -p pkg-arm64
           cp build/nanoctrl-arm64 pkg-arm64/nanoctrl
           cp README.md pkg-arm64/
           tar -czf "dist/nanoctrl-${TAG}-macos-arm64.tar.gz" -C pkg-arm64 nanoctrl README.md
 
-          # 3. Intel (x86_64) archive
+          # 5. Intel (x86_64) archive (CLI)
           mkdir -p pkg-x86_64
           cp build/nanoctrl-x86_64 pkg-x86_64/nanoctrl
           cp README.md pkg-x86_64/
           tar -czf "dist/nanoctrl-${TAG}-macos-x86_64.tar.gz" -C pkg-x86_64 nanoctrl README.md
 
-          # 4. Checksums
+          # 6. Cryptographic Checksums
           cd dist
-          shasum -a 256 nanoctrl-*.tar.gz > SHA256SUMS.txt
+          shasum -a 256 NANOCTRL-* nanoctrl-* > SHA256SUMS.txt
           cd ..
 
           ls -lh dist/
@@ -86,6 +96,8 @@ jobs:
         id: notes
         run: |
           TAG="${{ steps.vars.outputs.tag }}"
+          SIZE_DMG=$(ls -lh dist/NANOCTRL-${TAG}-macos.dmg | awk '{print $5}')
+          SIZE_ZIP=$(ls -lh dist/NANOCTRL-${TAG}-macos.app.zip | awk '{print $5}')
           SIZE_UNIV=$(ls -lh dist/nanoctrl-${TAG}-macos-universal.tar.gz | awk '{print $5}')
           SIZE_ARM=$(ls -lh dist/nanoctrl-${TAG}-macos-arm64.tar.gz | awk '{print $5}')
           SIZE_INTEL=$(ls -lh dist/nanoctrl-${TAG}-macos-x86_64.tar.gz | awk '{print $5}')
@@ -95,16 +107,23 @@ jobs:
 
           > **Tiny Remote Control, Nothing Else.**
 
-          ### Downloads & Packages
-          | Package | Target Architecture | Archive Size |
+          ### Graphical App Installer (Recommended)
+          | Package | Description | Size |
+          |---|---|---|
+          | **`NANOCTRL-${{ steps.vars.outputs.tag }}-macos.dmg`** | **macOS Disk Image** (Drag-and-Drop to `/Applications`) | **${SIZE_DMG}** |
+          | `NANOCTRL-${{ steps.vars.outputs.tag }}-macos.app.zip` | Signed Application Bundle (`NANOCTRL.app`) | ${SIZE_ZIP} |
+
+          ### Command-Line Binaries
+          | Package | Architecture | Archive Size |
           |---|---|---|
           | `nanoctrl-${{ steps.vars.outputs.tag }}-macos-universal.tar.gz` | **Universal** (Apple Silicon + Intel) | ${SIZE_UNIV} |
           | `nanoctrl-${{ steps.vars.outputs.tag }}-macos-arm64.tar.gz` | **Apple Silicon** (M1/M2/M3/M4) | ${SIZE_ARM} |
           | `nanoctrl-${{ steps.vars.outputs.tag }}-macos-x86_64.tar.gz` | **Intel x86_64** | ${SIZE_INTEL} |
 
-          ### Verification & Checksums
-          Refer to `SHA256SUMS.txt` attached to this release for integrity verification.
-          All automated tests (`make test`) passed with zero 3rd-party dependencies.
+          ### Trust & Integrity
+          - **Hardened Runtime**: Signed with Apple Hardened Runtime and entitlements.
+          - **TCC Metadata**: Includes explicit `NSScreenCaptureUsageDescription` and `NSAccessibilityUsageDescription`.
+          - **Checksums**: Verify with `SHA256SUMS.txt`.
           EOF
 
       - name: Publish GitHub Release

@@ -26,3 +26,6 @@ jobs:
 
       - name: Build Universal Binary (arm64 + x86_64)
         run: make universal
+
+      - name: Build and Validate macOS App Bundle
+        run: make bundle

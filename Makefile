@@ -32,7 +32,13 @@ TARGET_UNIVERSAL = build/nanoctrl-universal
 TARGET_ARM64 = build/nanoctrl-arm64
 TARGET_X86_64 = build/nanoctrl-x86_64
 
-.PHONY: all clean test size version check-version universal arm64 x86_64
+APP_NAME = NANOCTRL
+APP_BUNDLE = build/$(APP_NAME).app
+APP_CONTENTS = $(APP_BUNDLE)/Contents
+APP_MACOS = $(APP_CONTENTS)/MacOS
+APP_RESOURCES = $(APP_CONTENTS)/Resources
+
+.PHONY: all clean test size version check-version universal arm64 x86_64 bundle dmg
 
 all: $(TARGET) size
 
@@ -69,6 +75,40 @@ x86_64: check-version
 	@strip $(TARGET_X86_64)
 	@echo "Built x86_64 binary: $(TARGET_X86_64)"
 	@ls -lh $(TARGET_X86_64) | awk '{printf "x86_64 size: %s\n", $$5}'
+
+# Application Bundle (.app)
+bundle: universal resources/AppIcon.icns
+	@echo "Creating macOS application bundle: $(APP_BUNDLE)..."
+	@rm -rf $(APP_BUNDLE)
+	@mkdir -p $(APP_MACOS) $(APP_RESOURCES)
+	@cp $(TARGET_UNIVERSAL) $(APP_MACOS)/nanoctrl
+	@chmod +x $(APP_MACOS)/nanoctrl
+	@echo "APPL????" > $(APP_CONTENTS)/PkgInfo
+	@sed "s/%%VERSION%%/$(VERSION)/g" resources/Info.plist.template > $(APP_CONTENTS)/Info.plist
+	@plutil -lint $(APP_CONTENTS)/Info.plist
+	@cp resources/AppIcon.icns $(APP_RESOURCES)/AppIcon.icns
+	@echo "Signing application bundle with Hardened Runtime..."
+	@codesign --force --deep --options runtime --entitlements resources/entitlements.plist --sign - $(APP_BUNDLE)
+	@codesign --verify --deep --strict $(APP_BUNDLE)
+	@echo "[OK] Successfully built and signed $(APP_BUNDLE)"
+
+# Disk Image (.dmg)
+dmg: bundle
+	@echo "Packaging disk image: build/$(APP_NAME)-v$(VERSION).dmg..."
+	@rm -rf build/dmg_staging build/$(APP_NAME)-v$(VERSION).dmg
+	@mkdir -p build/dmg_staging
+	@cp -R $(APP_BUNDLE) build/dmg_staging/
+	@ln -s /Applications build/dmg_staging/Applications
+	@hdiutil create -volname "$(APP_NAME)" -srcfolder build/dmg_staging -ov -format UDZO build/$(APP_NAME)-v$(VERSION).dmg
+	@rm -rf build/dmg_staging
+	@echo "[OK] Created disk image: build/$(APP_NAME)-v$(VERSION).dmg"
+	@ls -lh build/$(APP_NAME)-v$(VERSION).dmg
+
+resources/AppIcon.icns:
+	@mkdir -p resources build
+	$(CC) -framework Cocoa tools/generate_icon.m -o build/gen_icon
+	@build/gen_icon
+	@rm -f build/gen_icon
 
 version:
 	@echo "$(VERSION)"
