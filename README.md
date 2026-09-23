@@ -68,13 +68,24 @@ make size
 
 You can run your own zero-dependency NANOCTRL relay server on any Linux/Cloud server (Ubuntu, Debian, Alpine, AWS, DigitalOcean, etc.).
 
-### Option A: Docker (Recommended)
+### Option A: GitHub Container Registry (Fastest)
+Run the pre-built multi-arch container image directly from GHCR with zero build step:
+
+```bash
+docker run -d \
+  --name nanoctrl-server \
+  --restart unless-stopped \
+  -p 7443:7443 \
+  ghcr.io/devlopersabbir/nanoctrl:latest
+```
+
+### Option B: Docker Compose
 ```bash
 cd docker
 docker compose up -d
 ```
 
-### Option B: Standalone Binary (`nanosrv`)
+### Option C: Standalone Binary (`nanosrv`)
 ```bash
 # Compile standalone server on Linux or macOS (no frameworks needed)
 make server

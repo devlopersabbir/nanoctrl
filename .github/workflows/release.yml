@@ -15,8 +15,11 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    name: Build & Release
+  # ==========================================
+  # 1. macOS Universal App & Binaries
+  # ==========================================
+  build-macos:
+    name: Build macOS (Universal, Apple Silicon, Intel)
     runs-on: macos-latest
 
     steps:
@@ -37,7 +40,6 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-          echo "Releasing: Tag '${TAG}', VERSION file '${VERSION}'"
           if [ "${TAG}" != "v${VERSION}" ]; then
             echo "::error::Tag '${TAG}' does not match VERSION 'v${VERSION}'! Strict versioning violated."
             exit 1
@@ -46,7 +48,7 @@ jobs:
       - name: Run Test Suite
         run: make test
 
-      - name: Build Multi-Architecture Binaries & macOS App Bundle
+      - name: Build macOS App Bundle, DMG, and Universal Binaries
         run: |
           make universal
           make arm64
@@ -54,81 +56,329 @@ jobs:
           make bundle
           make dmg
 
-      - name: Package Release Assets
+      - name: Build macOS Standalone Relay Server Binaries
         run: |
           TAG="${{ steps.vars.outputs.tag }}"
-          mkdir -p dist
+          VERSION="${{ steps.vars.outputs.version }}"
+          mkdir -p build-srv
 
-          # 1. Distributable Disk Image (.dmg)
-          cp "build/NANOCTRL-v${{ steps.vars.outputs.version }}.dmg" "dist/NANOCTRL-${TAG}-macos.dmg"
+          # 1. Server Universal
+          clang -Oz -flto -arch arm64 -arch x86_64 \
+            -DNANO_VERSION_STR=\"${VERSION}\" -DNANO_GIT_COMMIT=\"${TAG}\" \
+            -Isrc/core -Isrc/net -Isrc/crypto \
+            src/server/nanosrv_main.c src/net/server.c src/net/socket.c src/net/transport.c src/core/protocol.c src/crypto/random.c src/crypto/auth.c \
+            -lpthread -o build-srv/nanosrv-universal
+          strip build-srv/nanosrv-universal
 
-          # 2. Signed Application Bundle (.app.zip)
+          # 2. Server arm64
+          clang -Oz -flto -arch arm64 \
+            -DNANO_VERSION_STR=\"${VERSION}\" -DNANO_GIT_COMMIT=\"${TAG}\" \
+            -Isrc/core -Isrc/net -Isrc/crypto \
+            src/server/nanosrv_main.c src/net/server.c src/net/socket.c src/net/transport.c src/core/protocol.c src/crypto/random.c src/crypto/auth.c \
+            -lpthread -o build-srv/nanosrv-arm64
+          strip build-srv/nanosrv-arm64
+
+          # 3. Server x86_64
+          clang -Oz -flto -arch x86_64 \
+            -DNANO_VERSION_STR=\"${VERSION}\" -DNANO_GIT_COMMIT=\"${TAG}\" \
+            -Isrc/core -Isrc/net -Isrc/crypto \
+            src/server/nanosrv_main.c src/net/server.c src/net/socket.c src/net/transport.c src/core/protocol.c src/crypto/random.c src/crypto/auth.c \
+            -lpthread -o build-srv/nanosrv-x86_64
+          strip build-srv/nanosrv-x86_64
+
+      - name: Package macOS Assets
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          mkdir -p artifacts-macos
+
+          # 1. DMG Installer
+          cp "build/NANOCTRL-v${{ steps.vars.outputs.version }}.dmg" "artifacts-macos/NANOCTRL-${TAG}-macos.dmg"
+
+          # 2. Application Bundle Zip
           cd build
-          zip -r -y "../dist/NANOCTRL-${TAG}-macos.app.zip" NANOCTRL.app
+          zip -r -y "../artifacts-macos/NANOCTRL-${TAG}-macos.app.zip" NANOCTRL.app
           cd ..
 
-          # 3. Universal binary archive (CLI)
-          mkdir -p pkg-universal
-          cp build/nanoctrl-universal pkg-universal/nanoctrl
-          cp README.md pkg-universal/
-          tar -czf "dist/nanoctrl-${TAG}-macos-universal.tar.gz" -C pkg-universal nanoctrl README.md
+          # 3. Client CLI Archives
+          mkdir -p pkg-c-univ && cp build/nanoctrl-universal pkg-c-univ/nanoctrl && cp README.md pkg-c-univ/
+          tar -czf "artifacts-macos/nanoctrl-${TAG}-macos-universal.tar.gz" -C pkg-c-univ nanoctrl README.md
 
-          # 4. Apple Silicon (arm64) archive (CLI)
-          mkdir -p pkg-arm64
-          cp build/nanoctrl-arm64 pkg-arm64/nanoctrl
-          cp README.md pkg-arm64/
-          tar -czf "dist/nanoctrl-${TAG}-macos-arm64.tar.gz" -C pkg-arm64 nanoctrl README.md
+          mkdir -p pkg-c-arm && cp build/nanoctrl-arm64 pkg-c-arm/nanoctrl && cp README.md pkg-c-arm/
+          tar -czf "artifacts-macos/nanoctrl-${TAG}-macos-arm64.tar.gz" -C pkg-c-arm nanoctrl README.md
 
-          # 5. Intel (x86_64) archive (CLI)
+          mkdir -p pkg-c-x86 && cp build/nanoctrl-x86_64 pkg-c-x86/nanoctrl && cp README.md pkg-c-x86/
+          tar -czf "artifacts-macos/nanoctrl-${TAG}-macos-x86_64.tar.gz" -C pkg-c-x86 nanoctrl README.md
+
+          # 4. Server Archives
+          mkdir -p pkg-s-univ && cp build-srv/nanosrv-universal pkg-s-univ/nanosrv && cp README.md pkg-s-univ/
+          tar -czf "artifacts-macos/nanosrv-${TAG}-macos-universal.tar.gz" -C pkg-s-univ nanosrv README.md
+
+          mkdir -p pkg-s-arm && cp build-srv/nanosrv-arm64 pkg-s-arm/nanosrv && cp README.md pkg-s-arm/
+          tar -czf "artifacts-macos/nanosrv-${TAG}-macos-arm64.tar.gz" -C pkg-s-arm nanosrv README.md
+
+          mkdir -p pkg-s-x86 && cp build-srv/nanosrv-x86_64 pkg-s-x86/nanosrv && cp README.md pkg-s-x86/
+          tar -czf "artifacts-macos/nanosrv-${TAG}-macos-x86_64.tar.gz" -C pkg-s-x86 nanosrv README.md
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: artifacts-macos/*
+
+  # ==========================================
+  # 2. Linux Server & Binaries (x86_64, ARM64, ARMv7)
+  # ==========================================
+  build-linux:
+    name: Build Linux (x86_64, ARM64, ARMv7)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Cross Compilers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf tar gzip
+
+      - name: Resolve Version and Tag
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="$(cat VERSION | tr -d '\n\r')"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Compile Standalone Linux Server Binaries
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          VERSION="${{ steps.vars.outputs.version }}"
+          mkdir -p artifacts-linux
+
+          COMMON_SRCS="src/server/nanosrv_main.c src/net/server.c src/net/socket.c src/net/transport.c src/core/protocol.c src/crypto/random.c src/crypto/auth.c"
+          COMMON_FLAGS="-Oz -flto -Wall -Wextra -DNANO_VERSION_STR=\"${VERSION}\" -DNANO_GIT_COMMIT=\"${TAG}\" -Isrc/core -Isrc/net -Isrc/crypto"
+
+          # 1. Linux x86_64 (amd64)
           mkdir -p pkg-x86_64
-          cp build/nanoctrl-x86_64 pkg-x86_64/nanoctrl
-          cp README.md pkg-x86_64/
-          tar -czf "dist/nanoctrl-${TAG}-macos-x86_64.tar.gz" -C pkg-x86_64 nanoctrl README.md
+          gcc ${COMMON_FLAGS} ${COMMON_SRCS} -lpthread -o pkg-x86_64/nanosrv
+          strip pkg-x86_64/nanosrv
+          cp tools/nanosrv.service README.md pkg-x86_64/
+          tar -czf "artifacts-linux/nanosrv-${TAG}-linux-x86_64.tar.gz" -C pkg-x86_64 nanosrv nanosrv.service README.md
 
-          # 6. Cryptographic Checksums
+          # 2. Linux ARM64 (aarch64 / Raspberry Pi 4/5 / Graviton)
+          mkdir -p pkg-arm64
+          aarch64-linux-gnu-gcc ${COMMON_FLAGS} ${COMMON_SRCS} -lpthread -o pkg-arm64/nanosrv
+          aarch64-linux-gnu-strip pkg-arm64/nanosrv
+          cp tools/nanosrv.service README.md pkg-arm64/
+          tar -czf "artifacts-linux/nanosrv-${TAG}-linux-arm64.tar.gz" -C pkg-arm64 nanosrv nanosrv.service README.md
+
+          # 3. Linux ARMv7 (32-bit ARM / Raspberry Pi 2/3)
+          mkdir -p pkg-armv7
+          arm-linux-gnueabihf-gcc ${COMMON_FLAGS} ${COMMON_SRCS} -lpthread -o pkg-armv7/nanosrv
+          arm-linux-gnueabihf-strip pkg-armv7/nanosrv
+          cp tools/nanosrv.service README.md pkg-armv7/
+          tar -czf "artifacts-linux/nanosrv-${TAG}-linux-armv7.tar.gz" -C pkg-armv7 nanosrv nanosrv.service README.md
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: artifacts-linux/*
+
+  # ==========================================
+  # 3. Windows Server (x86_64)
+  # ==========================================
+  build-windows:
+    name: Build Windows (x86_64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install MinGW Cross Compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 zip
+
+      - name: Resolve Version and Tag
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="$(cat VERSION | tr -d '\n\r')"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Compile Standalone Windows Server Binary
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          VERSION="${{ steps.vars.outputs.version }}"
+          mkdir -p artifacts-windows pkg-win
+
+          COMMON_SRCS="src/server/nanosrv_main.c src/net/server.c src/net/socket.c src/net/transport.c src/core/protocol.c src/crypto/random.c src/crypto/auth.c"
+          COMMON_FLAGS="-O2 -flto -Wall -Wextra -DNANO_VERSION_STR=\"${VERSION}\" -DNANO_GIT_COMMIT=\"${TAG}\" -Isrc/core -Isrc/net -Isrc/crypto"
+
+          x86_64-w64-mingw32-gcc ${COMMON_FLAGS} ${COMMON_SRCS} -lws2_32 -lpthread -o pkg-win/nanosrv.exe
+          x86_64-w64-mingw32-strip pkg-win/nanosrv.exe
+          cp tools/run-server.bat README.md pkg-win/
+
+          cd pkg-win
+          zip -r "../artifacts-windows/nanosrv-${TAG}-windows-x86_64.zip" nanosrv.exe run-server.bat README.md
+          cd ..
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: artifacts-windows/*
+
+  # ==========================================
+  # 4. Release Packaging & Publishing
+  # ==========================================
+  publish-release:
+    name: Publish Multi-Platform Release
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve Version and Tag
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="$(cat VERSION | tr -d '\n\r')"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-staging
+
+      - name: Collate Release Assets & Generate Checksums
+        run: |
+          mkdir -p dist
+          find dist-staging/ -type f -exec cp {} dist/ \;
+
           cd dist
-          shasum -a 256 NANOCTRL-* nanoctrl-* > SHA256SUMS.txt
+          sha256sum * > SHA256SUMS.txt
           cd ..
 
           ls -lh dist/
 
-      - name: Generate Release Notes
+      - name: Generate Comprehensive Release Notes
         id: notes
         run: |
           TAG="${{ steps.vars.outputs.tag }}"
-          SIZE_DMG=$(ls -lh dist/NANOCTRL-${TAG}-macos.dmg | awk '{print $5}')
-          SIZE_ZIP=$(ls -lh dist/NANOCTRL-${TAG}-macos.app.zip | awk '{print $5}')
-          SIZE_UNIV=$(ls -lh dist/nanoctrl-${TAG}-macos-universal.tar.gz | awk '{print $5}')
-          SIZE_ARM=$(ls -lh dist/nanoctrl-${TAG}-macos-arm64.tar.gz | awk '{print $5}')
-          SIZE_INTEL=$(ls -lh dist/nanoctrl-${TAG}-macos-x86_64.tar.gz | awk '{print $5}')
+          
+          # Compute file sizes
+          SIZE_DMG=$(ls -lh dist/NANOCTRL-${TAG}-macos.dmg 2>/dev/null | awk '{print $5}' || echo "N/A")
+          SIZE_APP_ZIP=$(ls -lh dist/NANOCTRL-${TAG}-macos.app.zip 2>/dev/null | awk '{print $5}' || echo "N/A")
+          SIZE_MAC_CLI=$(ls -lh dist/nanoctrl-${TAG}-macos-universal.tar.gz 2>/dev/null | awk '{print $5}' || echo "N/A")
+          SIZE_MAC_SRV=$(ls -lh dist/nanosrv-${TAG}-macos-universal.tar.gz 2>/dev/null | awk '{print $5}' || echo "N/A")
+          SIZE_LINUX_X64=$(ls -lh dist/nanosrv-${TAG}-linux-x86_64.tar.gz 2>/dev/null | awk '{print $5}' || echo "N/A")
+          SIZE_LINUX_ARM64=$(ls -lh dist/nanosrv-${TAG}-linux-arm64.tar.gz 2>/dev/null | awk '{print $5}' || echo "N/A")
+          SIZE_LINUX_ARMV7=$(ls -lh dist/nanosrv-${TAG}-linux-armv7.tar.gz 2>/dev/null | awk '{print $5}' || echo "N/A")
+          SIZE_WIN_X64=$(ls -lh dist/nanosrv-${TAG}-windows-x86_64.zip 2>/dev/null | awk '{print $5}' || echo "N/A")
 
-          cat << 'EOF' > release_notes.md
-          ## NANOCTRL ${{ steps.vars.outputs.tag }}
+          cat << EOF > release_notes.md
+          # NANOCTRL ${TAG}
 
-          > **Tiny Remote Control, Nothing Else.**
+          > **Tiny Remote Control, Nothing Else.** Ultra-lightweight, zero-dependency remote desktop and self-hosted relay suite.
 
-          ### Graphical App Installer (Recommended)
-          | Package | Description | Size |
-          |---|---|---|
-          | **`NANOCTRL-${{ steps.vars.outputs.tag }}-macos.dmg`** | **macOS Disk Image** (Drag-and-Drop to `/Applications`) | **${SIZE_DMG}** |
-          | `NANOCTRL-${{ steps.vars.outputs.tag }}-macos.app.zip` | Signed Application Bundle (`NANOCTRL.app`) | ${SIZE_ZIP} |
+          ---
 
-          ### Command-Line Binaries
-          | Package | Architecture | Archive Size |
-          |---|---|---|
-          | `nanoctrl-${{ steps.vars.outputs.tag }}-macos-universal.tar.gz` | **Universal** (Apple Silicon + Intel) | ${SIZE_UNIV} |
-          | `nanoctrl-${{ steps.vars.outputs.tag }}-macos-arm64.tar.gz` | **Apple Silicon** (M1/M2/M3/M4) | ${SIZE_ARM} |
-          | `nanoctrl-${{ steps.vars.outputs.tag }}-macos-x86_64.tar.gz` | **Intel x86_64** | ${SIZE_INTEL} |
+          ## 📦 Download Packages
 
-          ### Trust & Integrity
-          - **Hardened Runtime**: Signed with Apple Hardened Runtime and entitlements.
-          - **TCC Metadata**: Includes explicit `NSScreenCaptureUsageDescription` and `NSAccessibilityUsageDescription`.
-          - **Checksums**: Verify with `SHA256SUMS.txt`.
+          ### 🍏 macOS (Desktop & CLI)
+          | Package | Description | Architecture | Size |
+          |:---|:---|:---|:---|
+          | **[\`NANOCTRL-${TAG}-macos.dmg\`](#)** | **macOS Installer (Recommended)** | Universal (M1/M2/M3/M4 & Intel) | **${SIZE_DMG}** |
+          | \`NANOCTRL-${TAG}-macos.app.zip\` | Signed Application Bundle | Universal | ${SIZE_APP_ZIP} |
+          | \`nanoctrl-${TAG}-macos-universal.tar.gz\` | Client Command Line Binary | Universal | ${SIZE_MAC_CLI} |
+          | \`nanosrv-${TAG}-macos-universal.tar.gz\` | Self-Hosted Relay Server | Universal | ${SIZE_MAC_SRV} |
 
-          ### First Launch on macOS (Gatekeeper)
-          When opening for the first time on macOS:
-          - **Right-click** `NANOCTRL.app` in Finder -> click **Open** -> click **Open** in the dialog (or go to **System Settings > Privacy & Security** and click **"Open Anyway"**).
-          - Or run: `xattr -cr /Applications/NANOCTRL.app`
+          ### 🐧 Linux & Unix-like (Self-Hosted Server)
+          | Package | Description | Architecture | Size |
+          |:---|:---|:---|:---|
+          | **[\`nanosrv-${TAG}-linux-x86_64.tar.gz\`](#)** | Linux Server + Systemd Unit | x86_64 (amd64) | **${SIZE_LINUX_X64}** |
+          | **[\`nanosrv-${TAG}-linux-arm64.tar.gz\`](#)** | Linux Server (Raspberry Pi 4/5, Graviton) | aarch64 (arm64) | **${SIZE_LINUX_ARM64}** |
+          | \`nanosrv-${TAG}-linux-armv7.tar.gz\` | Linux Server (Raspberry Pi 2/3) | armv7 | ${SIZE_LINUX_ARMV7} |
+
+          ### 🪟 Windows (Self-Hosted Server)
+          | Package | Description | Architecture | Size |
+          |:---|:---|:---|:---|
+          | **[\`nanosrv-${TAG}-windows-x86_64.zip\`](#)** | Windows Server (\`nanosrv.exe\` + Batch Runner) | x86_64 (64-bit) | **${SIZE_WIN_X64}** |
+
+          ### 🐳 Docker (1-Line Deployment)
+          \`\`\`bash
+          docker run -d --name nanoctrl-server -p 7443:7443 devlopersabbir/nanoctrl-server:latest
+          \`\`\`
+
+          ---
+
+          ## 🛡️ macOS First Launch & Gatekeeper Trust Guide
+
+          Because NANOCTRL is built independently as open-source software, macOS Gatekeeper may show a warning on first launch:
+          > *"Apple could not verify NANOCTRL is free of malware..."*
+
+          ### ⚡ Fastest Method (1 Terminal Command):
+          Open Terminal and run:
+          \`\`\`bash
+          xattr -cr /Applications/NANOCTRL.app
+          \`\`\`
+
+          ### 🖱️ GUI Method (No Terminal Required):
+          1. **Right-click** (or Control-click) \`NANOCTRL.app\` in Finder / Applications.
+          2. Select **Open** from the menu.
+          3. Click **Open** in the confirmation alert dialog. *(You only need to do this once)*.
+          *(Or open **System Settings > Privacy & Security** and click **"Open Anyway"** at the bottom)*.
+
+          ### 🔒 Permissions Required on macOS:
+          - **Screen Recording**: System Settings > Privacy & Security > Screen Recording *(for sharing display)*.
+          - **Accessibility**: System Settings > Privacy & Security > Accessibility *(for mouse/keyboard control)*.
+
+          ---
+
+          ## 🚀 Quick Setup Instructions
+
+          ### Self-Hosting on Linux VPS (Systemd)
+          \`\`\`bash
+          # 1. Download and extract
+          curl -LO https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/nanosrv-${TAG}-linux-x86_64.tar.gz
+          tar -xzf nanosrv-${TAG}-linux-x86_64.tar.gz
+          sudo cp nanosrv /usr/local/bin/
+
+          # 2. Install & Start Systemd Service
+          sudo cp nanosrv.service /etc/systemd/system/
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now nanosrv
+          \`\`\`
+
+          ### Running on Windows
+          Extract \`nanosrv-${TAG}-windows-x86_64.zip\` and double-click \`run-server.bat\`.
+
+          ---
+
+          ### 🔐 Integrity & Verification
+          Every release file is hashed. Verify checksums with:
+          \`\`\`bash
+          sha256sum -c SHA256SUMS.txt
+          \`\`\`
           EOF
 
       - name: Publish GitHub Release

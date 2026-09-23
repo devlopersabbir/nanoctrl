@@ -8,10 +8,12 @@ WORKDIR /build
 COPY src/ src/
 COPY VERSION VERSION
 
+ARG GIT_COMMIT=docker
+
 RUN mkdir -p bin && \
     clang -Oz -flto -Wall -Wextra -static \
     -DNANO_VERSION_STR=\"$(cat VERSION | tr -d '\n\r')\" \
-    -DNANO_GIT_COMMIT=\"docker\" \
+    -DNANO_GIT_COMMIT=\"${GIT_COMMIT}\" \
     -Isrc/core -Isrc/net -Isrc/crypto \
     src/server/nanosrv_main.c \
     src/net/server.c \

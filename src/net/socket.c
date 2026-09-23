@@ -1,34 +1,47 @@
 #include "socket.h"
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <poll.h>
-#include <signal.h>
+
+#ifdef _WIN32
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #pragma comment(lib, "ws2_32.lib")
+  #define poll WSAPoll
+#else
+  #include <unistd.h>
+  #include <fcntl.h>
+  #include <errno.h>
+  #include <sys/types.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <netinet/tcp.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>
+  #include <poll.h>
+  #include <signal.h>
+#endif
 
 bool nano_net_init(void) {
-#ifndef _WIN32
+#ifdef _WIN32
+    WSADATA wsa;
+    return WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
+#else
     signal(SIGPIPE, SIG_IGN);
-#endif
     return true;
+#endif
 }
 
 void nano_net_cleanup(void) {
-    /* No-op on POSIX */
+#ifdef _WIN32
+    WSACleanup();
+#endif
 }
 
 nano_socket_t nano_socket_create(void) {
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) return NANO_INVALID_SOCKET;
+    nano_socket_t sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (!nano_socket_is_valid(sock)) return NANO_INVALID_SOCKET;
     int opt = 1;
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
 #ifdef SO_NOSIGPIPE
     int set = 1;
     setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int));
@@ -69,8 +82,8 @@ nano_socket_t nano_socket_accept(nano_socket_t server_sock, char *client_ip, siz
 
     struct sockaddr_in client_addr;
     socklen_t addr_len = sizeof(client_addr);
-    int client_fd = accept(server_sock, (struct sockaddr *)&client_addr, &addr_len);
-    if (client_fd < 0) return NANO_INVALID_SOCKET;
+    nano_socket_t client_fd = accept(server_sock, (struct sockaddr *)&client_addr, &addr_len);
+    if (!nano_socket_is_valid(client_fd)) return NANO_INVALID_SOCKET;
 
     nano_socket_set_nodelay(client_fd, true);
 
@@ -110,10 +123,13 @@ bool nano_socket_connect(nano_socket_t sock, const char *host, uint16_t port, in
         nano_socket_set_nonblocking(sock, false);
         return true;
     }
+
+#ifndef _WIN32
     if (errno != EINPROGRESS) {
         nano_socket_set_nonblocking(sock, false);
         return false;
     }
+#endif
 
     struct pollfd pfd;
     pfd.fd = sock;
@@ -126,7 +142,7 @@ bool nano_socket_connect(nano_socket_t sock, const char *host, uint16_t port, in
 
     int err = 0;
     socklen_t err_len = sizeof(err);
-    if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &err, &err_len) < 0 || err != 0) {
+    if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&err, &err_len) < 0 || err != 0) {
         nano_socket_set_nonblocking(sock, false);
         return false;
     }
@@ -137,6 +153,10 @@ bool nano_socket_connect(nano_socket_t sock, const char *host, uint16_t port, in
 
 bool nano_socket_set_nonblocking(nano_socket_t sock, bool nonblocking) {
     if (!nano_socket_is_valid(sock)) return false;
+#ifdef _WIN32
+    u_long mode = nonblocking ? 1 : 0;
+    return ioctlsocket(sock, FIONBIO, &mode) == 0;
+#else
     int flags = fcntl(sock, F_GETFL, 0);
     if (flags < 0) return false;
     if (nonblocking) {
@@ -145,12 +165,13 @@ bool nano_socket_set_nonblocking(nano_socket_t sock, bool nonblocking) {
         flags &= ~O_NONBLOCK;
     }
     return fcntl(sock, F_SETFL, flags) == 0;
+#endif
 }
 
 bool nano_socket_set_nodelay(nano_socket_t sock, bool nodelay) {
     if (!nano_socket_is_valid(sock)) return false;
     int flag = nodelay ? 1 : 0;
-    return setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag)) == 0;
+    return setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&flag, sizeof(flag)) == 0;
 }
 
 bool nano_socket_send_all(nano_socket_t sock, const void *buf, size_t len, int timeout_ms) {
@@ -167,11 +188,13 @@ bool nano_socket_send_all(nano_socket_t sock, const void *buf, size_t len, int t
             if (ret <= 0) return false;
         }
 
-        ssize_t sent = send(sock, ptr, remaining, 0);
+        ssize_t sent = send(sock, (const char *)ptr, (int)remaining, 0);
         if (sent <= 0) {
+#ifndef _WIN32
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
                 continue;
             }
+#endif
             return false;
         }
         ptr += sent;
@@ -194,11 +217,13 @@ bool nano_socket_recv_all(nano_socket_t sock, void *buf, size_t len, int timeout
             if (ret <= 0) return false;
         }
 
-        ssize_t received = recv(sock, ptr, remaining, 0);
+        ssize_t received = recv(sock, (char *)ptr, (int)remaining, 0);
         if (received <= 0) {
+#ifndef _WIN32
             if (received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
                 continue;
             }
+#endif
             return false;
         }
         ptr += received;
@@ -209,10 +234,18 @@ bool nano_socket_recv_all(nano_socket_t sock, void *buf, size_t len, int timeout
 
 void nano_socket_close(nano_socket_t sock) {
     if (nano_socket_is_valid(sock)) {
+#ifdef _WIN32
+        closesocket(sock);
+#else
         close(sock);
+#endif
     }
 }
 
 bool nano_socket_is_valid(nano_socket_t sock) {
+#ifdef _WIN32
+    return sock != INVALID_SOCKET;
+#else
     return sock >= 0;
+#endif
 }

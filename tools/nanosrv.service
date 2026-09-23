@@ -1,0 +1,14 @@
+[Unit]
+Description=NANOCTRL Rendezvous & Relay Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/nanosrv 7443
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
