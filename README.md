@@ -1,5 +1,9 @@
 # NANOCTRL (macOS Native & Self-Hosted WAN)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20Docker-brightgreen.svg)](#building)
+[![Binary Size](https://img.shields.io/badge/Binary%20Size-~106%20KB-orange.svg)](#building)
+
 > **Tiny Remote Control, Nothing Else.**
 
 NANOCTRL is an ultra-lightweight, zero-dependency remote-control suite written in pure C and Cocoa for macOS.
@@ -10,6 +14,8 @@ NANOCTRL is an ultra-lightweight, zero-dependency remote-control suite written i
 * **Device ID & PIN Pairing**: Connect using a **9-digit Device ID** (`842 190 345`) and **6-digit PIN** (`582 914`) over the Internet, or connect directly via LAN (`IP:port`).
 * **Fast binary protocol**: 8-byte message header, tile-based dirty rect detection (64x64 tiles), RLE run-length encoding.
 * **Security first**: Temporary 6-digit PIN with HMAC-SHA256 challenge-response authentication and mandatory host approval prompt running end-to-end through relay tunnels.
+
+📖 **[Official Wiki & Documentation](wiki/Home.md)**
 
 ---
 
@@ -166,3 +172,14 @@ This is standard macOS behavior for open-source software built outside the paid 
 macOS requires two permissions for remote control:
 - **Screen Recording**: Required to capture display frames. (System Settings > Privacy & Security > Screen Recording). If not enabled, NANOCTRL falls back to a synthetic animated test pattern for testing.
 - **Accessibility**: Required to inject mouse and keyboard input events. (System Settings > Privacy & Security > Accessibility).
+
+---
+
+## 📄 License & Community
+
+* **License**: [MIT License](LICENSE) © 2026 devlopersabbir
+* **Privacy Policy**: [PRIVACY.md](PRIVACY.md) (Zero telemetry, zero tracking)
+* **Code of Conduct**: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+* **Security Policy**: [SECURITY.md](SECURITY.md)
+* **Contributing**: [CONTRIBUTING.md](CONTRIBUTING.md)
+* **Wiki & Documentation**: [wiki/Home.md](wiki/Home.md)

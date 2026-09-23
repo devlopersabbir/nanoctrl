@@ -1,0 +1,57 @@
+name: Deploy GitHub Wiki
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'wiki/**'
+      - '.github/workflows/wiki.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy-wiki:
+    name: Sync & Publish Wiki
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Deploy to GitHub Wiki
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          WIKI_REPO="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p wiki_clone
+          if git clone "$WIKI_REPO" wiki_clone 2>/dev/null; then
+            echo "[INFO] Successfully cloned existing GitHub Wiki repository."
+          else
+            echo "[INFO] Wiki repository empty or uninitialized. Initializing new repository..."
+            cd wiki_clone
+            git init
+            git remote add origin "$WIKI_REPO"
+            cd ..
+          fi
+
+          # Copy all modular wiki pages
+          cp -R wiki/* wiki_clone/
+
+          cd wiki_clone
+          git add .
+
+          if git diff --staged --quiet; then
+            echo "[OK] No changes to deploy to wiki."
+          else
+            git commit -m "docs(wiki): sync wiki documentation [skip ci]"
+            git push origin HEAD:master 2>/dev/null || git push origin HEAD:main 2>/dev/null || git push -u origin master
+            echo "[SUCCESS] Successfully published GitHub Wiki!"
+          fi
