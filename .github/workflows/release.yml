@@ -5,16 +5,108 @@ on:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version Bump Type'
+        required: false
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - keep
 
 permissions:
   contents: write
 
 jobs:
   # ==========================================
+  # 0. Auto-Resolve & Bump Release Version
+  # ==========================================
+  init-version:
+    name: Resolve & Auto-Bump Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and Auto-Increment Version
+        id: version
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 1. Check if triggered directly by tag push (e.g., git push origin v0.2.0)
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+            echo "[INFO] Triggered by existing tag push: ${TAG}"
+          else
+            # Workflow dispatch or branch trigger: check current VERSION file
+            CUR_VER="$(cat VERSION 2>/dev/null | tr -d '\n\r' || echo "0.1.0")"
+            BUMP_TYPE="${{ inputs.bump || 'patch' }}"
+
+            # If the current tag already exists on git or user chose bump, increment version
+            if [ "${BUMP_TYPE}" != "keep" ] || git rev-parse "v${CUR_VER}" >/dev/null 2>&1; then
+              IFS='.' read -r MAJOR MINOR PATCH <<< "${CUR_VER}"
+              MAJOR="${MAJOR:-0}"
+              MINOR="${MINOR:-1}"
+              PATCH="${PATCH:-0}"
+
+              case "${BUMP_TYPE}" in
+                major)
+                  MAJOR=$((MAJOR + 1))
+                  MINOR=0
+                  PATCH=0
+                  ;;
+                minor)
+                  MINOR=$((MINOR + 1))
+                  PATCH=0
+                  ;;
+                patch|*)
+                  PATCH=$((PATCH + 1))
+                  ;;
+              esac
+              VERSION="${MAJOR}.${MINOR}.${PATCH}"
+              TAG="v${VERSION}"
+              echo "[INFO] Auto-bumped version (${BUMP_TYPE}): ${TAG}"
+            else
+              VERSION="${CUR_VER}"
+              TAG="v${VERSION}"
+              echo "[INFO] Using version from VERSION file: ${TAG}"
+            fi
+
+            # Update VERSION file in git
+            echo "${VERSION}" > VERSION
+            if [ -n "$(git status --porcelain VERSION)" ]; then
+              git add VERSION
+              git commit -m "chore(release): bump version to ${TAG} [skip ci]" || true
+              git push origin HEAD:${GITHUB_REF_NAME:-main} || true
+            fi
+
+            # Create and push git tag if it doesn't exist
+            if ! git rev-parse "${TAG}" >/dev/null 2>&1; then
+              git tag -a "${TAG}" -m "Release ${TAG}"
+              git push origin "${TAG}" || true
+            fi
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "[INFO] Target Release Tag: ${TAG} (${VERSION})"
+
+  # ==========================================
   # 1. macOS Universal App & Binaries
   # ==========================================
   build-macos:
     name: Build macOS (Universal, Apple Silicon, Intel)
+    needs: [init-version]
     runs-on: macos-latest
 
     steps:
@@ -23,14 +115,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve Version and Tag
-        id: vars
+      - name: Sync Version
         run: |
-          VERSION="$(cat VERSION | tr -d '\n\r')"
-          TAG="v${VERSION}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "[INFO] Releasing Version: ${TAG} (${VERSION})"
+          echo "${{ needs.init-version.outputs.version }}" > VERSION
 
       - name: Run Test Suite
         run: make test
@@ -45,8 +132,8 @@ jobs:
 
       - name: Build macOS Standalone Relay Server Binaries
         run: |
-          TAG="${{ steps.vars.outputs.tag }}"
-          VERSION="${{ steps.vars.outputs.version }}"
+          TAG="${{ needs.init-version.outputs.tag }}"
+          VERSION="${{ needs.init-version.outputs.version }}"
           mkdir -p build-srv
 
           # 1. Server Universal
@@ -75,11 +162,12 @@ jobs:
 
       - name: Package macOS Assets
         run: |
-          TAG="${{ steps.vars.outputs.tag }}"
+          TAG="${{ needs.init-version.outputs.tag }}"
+          VERSION="${{ needs.init-version.outputs.version }}"
           mkdir -p artifacts-macos
 
           # 1. DMG Installer
-          cp "build/NANOCTRL-v${{ steps.vars.outputs.version }}.dmg" "artifacts-macos/NANOCTRL-${TAG}-macos.dmg"
+          cp "build/NANOCTRL-v${VERSION}.dmg" "artifacts-macos/NANOCTRL-${TAG}-macos.dmg"
 
           # 2. Application Bundle Zip
           cd build
@@ -117,6 +205,7 @@ jobs:
   # ==========================================
   build-linux:
     name: Build Linux (x86_64, ARM64, ARMv7)
+    needs: [init-version]
     runs-on: ubuntu-latest
 
     steps:
@@ -128,19 +217,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf tar gzip
 
-      - name: Resolve Version and Tag
-        id: vars
-        run: |
-          VERSION="$(cat VERSION | tr -d '\n\r')"
-          TAG="v${VERSION}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "[INFO] Releasing Version: ${TAG} (${VERSION})"
-
       - name: Compile Standalone Linux Server Binaries
         run: |
-          TAG="${{ steps.vars.outputs.tag }}"
-          VERSION="${{ steps.vars.outputs.version }}"
+          TAG="${{ needs.init-version.outputs.tag }}"
+          VERSION="${{ needs.init-version.outputs.version }}"
           mkdir -p artifacts-linux
 
           COMMON_SRCS="src/server/nanosrv_main.c src/net/server.c src/net/socket.c src/net/transport.c src/core/protocol.c src/crypto/random.c src/crypto/auth.c"
@@ -178,6 +258,7 @@ jobs:
   # ==========================================
   build-windows:
     name: Build Windows (x86_64)
+    needs: [init-version]
     runs-on: ubuntu-latest
 
     steps:
@@ -189,19 +270,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mingw-w64 zip
 
-      - name: Resolve Version and Tag
-        id: vars
-        run: |
-          VERSION="$(cat VERSION | tr -d '\n\r')"
-          TAG="v${VERSION}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "[INFO] Releasing Version: ${TAG} (${VERSION})"
-
       - name: Compile Standalone Windows Server Binary
         run: |
-          TAG="${{ steps.vars.outputs.tag }}"
-          VERSION="${{ steps.vars.outputs.version }}"
+          TAG="${{ needs.init-version.outputs.tag }}"
+          VERSION="${{ needs.init-version.outputs.version }}"
           mkdir -p artifacts-windows pkg-win
 
           COMMON_SRCS="src/server/nanosrv_main.c src/net/server.c src/net/socket.c src/net/transport.c src/core/protocol.c src/crypto/random.c src/crypto/auth.c"
@@ -226,20 +298,12 @@ jobs:
   # ==========================================
   publish-release:
     name: Publish Multi-Platform Release
-    needs: [build-macos, build-linux, build-windows]
+    needs: [init-version, build-macos, build-linux, build-windows]
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Resolve Version and Tag
-        id: vars
-        run: |
-          VERSION="$(cat VERSION | tr -d '\n\r')"
-          TAG="v${VERSION}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
@@ -260,7 +324,8 @@ jobs:
       - name: Generate Comprehensive Release Notes
         id: notes
         run: |
-          TAG="${{ steps.vars.outputs.tag }}"
+          TAG="${{ needs.init-version.outputs.tag }}"
+          VERSION="${{ needs.init-version.outputs.version }}"
           
           # Compute file sizes
           SIZE_DMG=$(ls -lh dist/NANOCTRL-${TAG}-macos.dmg 2>/dev/null | awk '{print $5}' || echo "N/A")
@@ -361,10 +426,11 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.vars.outputs.tag }}
-          name: NANOCTRL ${{ steps.vars.outputs.tag }}
+          tag_name: ${{ needs.init-version.outputs.tag }}
+          name: NANOCTRL ${{ needs.init-version.outputs.tag }}
           body_path: release_notes.md
           files: |
             dist/*
           draft: false
           prerelease: false
+
