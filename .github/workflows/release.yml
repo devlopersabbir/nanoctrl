@@ -207,7 +207,7 @@ jobs:
           COMMON_SRCS="src/server/nanosrv_main.c src/net/server.c src/net/socket.c src/net/transport.c src/core/protocol.c src/crypto/random.c src/crypto/auth.c"
           COMMON_FLAGS="-O2 -flto -Wall -Wextra -DNANO_VERSION_STR=\"${VERSION}\" -DNANO_GIT_COMMIT=\"${TAG}\" -Isrc/core -Isrc/net -Isrc/crypto"
 
-          x86_64-w64-mingw32-gcc ${COMMON_FLAGS} ${COMMON_SRCS} -lws2_32 -lpthread -o pkg-win/nanosrv.exe
+          x86_64-w64-mingw32-gcc ${COMMON_FLAGS} ${COMMON_SRCS} -lws2_32 -ladvapi32 -lpthread -o pkg-win/nanosrv.exe
           x86_64-w64-mingw32-strip pkg-win/nanosrv.exe
           cp tools/run-server.bat README.md pkg-win/
 

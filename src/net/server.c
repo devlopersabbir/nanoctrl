@@ -5,16 +5,28 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
-#include <unistd.h>
-#include <poll.h>
-#include <errno.h>
-#include <sys/time.h>
-#include <sys/socket.h>
+
+#ifdef _WIN32
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #include <windows.h>
+  #define poll WSAPoll
+#else
+  #include <unistd.h>
+  #include <poll.h>
+  #include <errno.h>
+  #include <sys/time.h>
+  #include <sys/socket.h>
+#endif
 
 static uint64_t get_time_ms(void) {
+#ifdef _WIN32
+    return (uint64_t)GetTickCount64();
+#else
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
+#endif
 }
 
 void nano_format_device_id(uint32_t id, char *out_buf, size_t buf_size) {
@@ -303,7 +315,11 @@ static void *server_thread_func(void *arg) {
         }
         pthread_mutex_unlock(&srv->lock);
 
+#ifdef _WIN32
+        int poll_res = poll(fds, (ULONG)fd_count, 100);
+#else
         int poll_res = poll(fds, (nfds_t)fd_count, 100);
+#endif
         if (poll_res < 0) {
             if (errno == EINTR) continue;
             break;
@@ -356,7 +372,7 @@ static void *server_thread_func(void *arg) {
 
             /* Host -> Controller */
             if (fds[host_fd_idx].revents & POLLIN) {
-                ssize_t n = recv(room->host_sock, relay_buf, sizeof(relay_buf), 0);
+                int n = (int)recv(room->host_sock, (char *)relay_buf, (int)sizeof(relay_buf), 0);
                 if (n <= 0) {
                     close_room = true;
                 } else {
@@ -370,7 +386,7 @@ static void *server_thread_func(void *arg) {
 
             /* Controller -> Host */
             if (!close_room && (fds[ctrl_fd_idx].revents & POLLIN)) {
-                ssize_t n = recv(room->ctrl_sock, relay_buf, sizeof(relay_buf), 0);
+                int n = (int)recv(room->ctrl_sock, (char *)relay_buf, (int)sizeof(relay_buf), 0);
                 if (n <= 0) {
                     close_room = true;
                 } else {

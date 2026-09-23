@@ -5,7 +5,10 @@
 #ifdef _WIN32
   #include <winsock2.h>
   #include <ws2tcpip.h>
-  #pragma comment(lib, "ws2_32.lib")
+  #ifdef _MSC_VER
+    #pragma comment(lib, "ws2_32.lib")
+    #pragma comment(lib, "advapi32.lib")
+  #endif
   #define poll WSAPoll
 #else
   #include <unistd.h>

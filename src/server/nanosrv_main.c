@@ -4,7 +4,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
-#include <unistd.h>
+
+#ifdef _WIN32
+  #include <windows.h>
+  #define sleep_sec(s) Sleep((s) * 1000)
+#else
+  #include <unistd.h>
+  #define sleep_sec(s) sleep(s)
+#endif
 
 static volatile bool g_srv_running = true;
 
@@ -62,7 +69,7 @@ int main(int argc, char *argv[]) {
     print_banner(port);
 
     while (g_srv_running && srv->is_running) {
-        sleep(1);
+        sleep_sec(1);
     }
 
     printf("\nShutting down NANOCTRL server...\n");

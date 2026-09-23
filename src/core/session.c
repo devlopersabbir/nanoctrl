@@ -29,11 +29,11 @@ uint32_t nano_session_get_device_id(nano_session_t *s) {
 
 static void host_frame_captured(const nano_frame_t *frame, void *user_data) {
     nano_session_t *s = (nano_session_t *)user_data;
-    if (!s || !s->is_running || s->state != SESSION_STATE_ACTIVE) return;
+    if (!s || !s->is_running || s->state != SESSION_STATE_ACTIVE || !frame || !frame->data) return;
 
     pthread_mutex_lock(&s->lock);
 
-    if (!nano_socket_is_valid(s->conn_sock)) {
+    if (!s->is_running || s->state != SESSION_STATE_ACTIVE || !nano_socket_is_valid(s->conn_sock)) {
         pthread_mutex_unlock(&s->lock);
         return;
     }
@@ -771,6 +771,10 @@ void nano_session_send_key(nano_session_t *s, uint16_t keycode, nano_key_action_
 void nano_session_stop(nano_session_t *s) {
     if (!s || !s->is_running) return;
     s->is_running = false;
+
+    if (s->capture) {
+        nano_capture_stop(s->capture);
+    }
 
     if (nano_socket_is_valid(s->conn_sock)) {
         nano_msg_disconnect_t disc = { .reason = 0 };

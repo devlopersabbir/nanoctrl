@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  build-and-test:
+  build-and-test-macos:
     name: Build & Test (macOS)
     runs-on: macos-latest
 
@@ -18,8 +18,8 @@ jobs:
       - name: Validate Semantic Versioning
         run: make check-version
 
-      - name: Build Native Binary
-        run: make
+      - name: Build Native Binary & Server
+        run: make all
 
       - name: Run Test Suite
         run: make test
@@ -27,5 +27,52 @@ jobs:
       - name: Build Universal Binary (arm64 + x86_64)
         run: make universal
 
-      - name: Build and Validate macOS App Bundle
-        run: make bundle
+      - name: Build and Validate macOS App Bundle & DMG
+        run: make dmg
+
+  build-linux:
+    name: Build & Test Linux (x86_64, ARM64, ARMv7)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Compilers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
+
+      - name: Build Linux Server Binaries
+        run: |
+          COMMON_SRCS="src/server/nanosrv_main.c src/net/server.c src/net/socket.c src/net/transport.c src/core/protocol.c src/crypto/random.c src/crypto/auth.c"
+          COMMON_FLAGS="-Oz -flto -Wall -Wextra -DNANO_VERSION_STR=\"0.1.0\" -DNANO_GIT_COMMIT=\"ci\" -Isrc/core -Isrc/net -Isrc/crypto"
+          gcc ${COMMON_FLAGS} ${COMMON_SRCS} -lpthread -o nanosrv-x86_64
+          aarch64-linux-gnu-gcc ${COMMON_FLAGS} ${COMMON_SRCS} -lpthread -o nanosrv-arm64
+          arm-linux-gnueabihf-gcc ${COMMON_FLAGS} ${COMMON_SRCS} -lpthread -o nanosrv-armv7
+
+      - name: Run Linux Unit Tests
+        run: |
+          gcc -Oz -Wall -Wextra -Isrc/core -Isrc/net -Isrc/screen -Isrc/crypto tests/test_protocol.c src/core/protocol.c -o test_protocol
+          ./test_protocol
+          gcc -Oz -Wall -Wextra -Isrc/core -Isrc/net -Isrc/screen -Isrc/crypto tests/test_diff.c src/screen/diff.c src/screen/capture.c src/core/protocol.c -o test_diff
+          ./test_diff
+
+  build-windows:
+    name: Build Windows (x86_64 MinGW)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install MinGW
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64
+
+      - name: Build Windows Server Binary
+        run: |
+          COMMON_SRCS="src/server/nanosrv_main.c src/net/server.c src/net/socket.c src/net/transport.c src/core/protocol.c src/crypto/random.c src/crypto/auth.c"
+          COMMON_FLAGS="-O2 -flto -Wall -Wextra -DNANO_VERSION_STR=\"0.1.0\" -DNANO_GIT_COMMIT=\"ci\" -Isrc/core -Isrc/net -Isrc/crypto"
+          x86_64-w64-mingw32-gcc ${COMMON_FLAGS} ${COMMON_SRCS} -lws2_32 -ladvapi32 -lpthread -o nanosrv.exe

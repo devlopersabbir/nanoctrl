@@ -10,7 +10,7 @@ ifeq ($(GIT_COMMIT),)
   GIT_COMMIT := dev
 endif
 
-CFLAGS ?= -Oz -flto -Wall -Wextra -Wno-unused-command-line-argument
+CFLAGS ?= -Oz -flto -Wall -Wextra -Wno-unused-command-line-argument -fobjc-arc
 CFLAGS += -DNANO_VERSION_STR=\"$(VERSION)\" -DNANO_GIT_COMMIT=\"$(GIT_COMMIT)\"
 
 INCLUDES = -Isrc/core -Isrc/net -Isrc/screen -Isrc/input -Isrc/crypto -Isrc/platform/macos
