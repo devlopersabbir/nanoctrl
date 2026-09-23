@@ -24,25 +24,30 @@ jobs:
 
       - name: Deploy to GitHub Wiki
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.WIKI_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          WIKI_REPO="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+          # Authenticate via OAuth2 token
+          WIKI_REPO="https://oauth2:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global init.defaultBranch master
 
           mkdir -p wiki_clone
-          if git clone "$WIKI_REPO" wiki_clone 2>/dev/null; then
-            echo "[INFO] Successfully cloned existing GitHub Wiki repository."
+
+          echo "[INFO] Attempting to clone existing GitHub Wiki..."
+          if git clone "$WIKI_REPO" wiki_clone; then
+            echo "[INFO] Successfully connected to GitHub Wiki repository."
           else
-            echo "[INFO] Wiki repository empty or uninitialized. Initializing new repository..."
+            echo "[WARN] Could not clone wiki repository directly."
+            echo "[INFO] Initializing local repository..."
             cd wiki_clone
             git init
             git remote add origin "$WIKI_REPO"
             cd ..
           fi
 
-          # Copy all modular wiki pages
+          # Copy modular wiki documentation
           cp -R wiki/* wiki_clone/
 
           cd wiki_clone
@@ -52,6 +57,18 @@ jobs:
             echo "[OK] No changes to deploy to wiki."
           else
             git commit -m "docs(wiki): sync wiki documentation [skip ci]"
-            git push origin HEAD:master 2>/dev/null || git push origin HEAD:main 2>/dev/null || git push -u origin master
-            echo "[SUCCESS] Successfully published GitHub Wiki!"
+            
+            echo "[INFO] Pushing wiki updates to GitHub..."
+            if git push origin master --force || git push origin main --force; then
+              echo "[SUCCESS] Successfully published GitHub Wiki!"
+            else
+              echo "::error::Failed to push to GitHub Wiki repository."
+              echo "========================================================================="
+              echo "HOW TO FIX THIS IN 10 SECONDS:"
+              echo "1. Initialize GitHub Wiki: Go to your repository on GitHub -> Click the 'Wiki' tab -> Click 'Create the first page' (or 'Save page')."
+              echo "   (GitHub does not physically create the .wiki.git backend until the first page is saved in the web UI)."
+              echo "2. Enable Actions Write Permissions: Go to Settings -> Actions -> General -> Workflow permissions -> Select 'Read and write permissions'."
+              echo "========================================================================="
+              exit 1
+            fi
           fi
