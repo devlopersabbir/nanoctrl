@@ -5,11 +5,6 @@ on:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Version tag to release (e.g. v0.1.0)'
-        required: true
-        default: 'v0.1.0'
 
 permissions:
   contents: write
@@ -31,19 +26,11 @@ jobs:
       - name: Resolve Version and Tag
         id: vars
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
           VERSION="$(cat VERSION | tr -d '\n\r')"
+          TAG="v${VERSION}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
-          if [ "${TAG}" != "v${VERSION}" ]; then
-            echo "::error::Tag '${TAG}' does not match VERSION 'v${VERSION}'! Strict versioning violated."
-            exit 1
-          fi
+          echo "[INFO] Releasing Version: ${TAG} (${VERSION})"
 
       - name: Run Test Suite
         run: make test
@@ -144,14 +131,11 @@ jobs:
       - name: Resolve Version and Tag
         id: vars
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
           VERSION="$(cat VERSION | tr -d '\n\r')"
+          TAG="v${VERSION}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "[INFO] Releasing Version: ${TAG} (${VERSION})"
 
       - name: Compile Standalone Linux Server Binaries
         run: |
@@ -208,14 +192,11 @@ jobs:
       - name: Resolve Version and Tag
         id: vars
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
           VERSION="$(cat VERSION | tr -d '\n\r')"
+          TAG="v${VERSION}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "[INFO] Releasing Version: ${TAG} (${VERSION})"
 
       - name: Compile Standalone Windows Server Binary
         run: |
@@ -255,12 +236,8 @@ jobs:
       - name: Resolve Version and Tag
         id: vars
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
           VERSION="$(cat VERSION | tr -d '\n\r')"
+          TAG="v${VERSION}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
@@ -326,7 +303,7 @@ jobs:
 
           ### 🐳 Docker (1-Line Deployment)
           \`\`\`bash
-          docker run -d --name nanoctrl-server -p 7443:7443 devlopersabbir/nanoctrl-server:latest
+          docker run -d --name nanoctrl-server -p 7443:7443 ghcr.io/devlopersabbir/nanoctrl:latest
           \`\`\`
 
           ---
