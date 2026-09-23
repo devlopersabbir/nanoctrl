@@ -38,8 +38,16 @@ struct nano_session_s {
     nano_role_t role;
     nano_session_state_t state;
     char pin[7];
+    uint32_t device_id;
     char remote_host[128];
     uint16_t port;
+
+    /* Self-hosted server relay configuration */
+    bool is_relay;
+    char server_host[128];
+    uint16_t server_port;
+    uint32_t target_device_id;
+    nano_socket_t server_control_sock;
 
     nano_socket_t listen_sock;
     nano_socket_t conn_sock;
@@ -70,11 +78,18 @@ struct nano_session_s {
 nano_session_t *nano_session_create(nano_role_t role);
 void nano_session_destroy(nano_session_t *s);
 
+/* Device ID generation & formatting */
+uint32_t nano_generate_device_id(void);
+void nano_session_set_device_id(nano_session_t *s, uint32_t id);
+uint32_t nano_session_get_device_id(nano_session_t *s);
+
 /* Host functions */
 bool nano_session_start_host(nano_session_t *s, uint16_t port, const char *custom_pin);
+bool nano_session_start_host_relay(nano_session_t *s, const char *server_host, uint16_t server_port, uint32_t custom_id, const char *custom_pin);
 
 /* Controller functions */
 bool nano_session_start_controller(nano_session_t *s, const char *host, uint16_t port, const char *pin);
+bool nano_session_start_controller_relay(nano_session_t *s, const char *server_host, uint16_t server_port, uint32_t target_device_id, const char *pin);
 
 /* Controller input dispatchers */
 void nano_session_send_mouse_move(nano_session_t *s, uint16_t norm_x, uint16_t norm_y);

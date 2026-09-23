@@ -1,4 +1,5 @@
 #import "ui_mac.h"
+#import "../../net/server.h"
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
 #include <stdio.h>
@@ -158,9 +159,11 @@
 @property (nonatomic, strong) NSWindow *viewportWindow;
 @property (nonatomic, strong) RemoteViewportView *viewportView;
 @property (nonatomic, strong) NSTextField *statusLabel;
+@property (nonatomic, strong) NSTextField *idLabel;
 @property (nonatomic, strong) NSTextField *pinLabel;
-@property (nonatomic, strong) NSTextField *hostInput;
+@property (nonatomic, strong) NSTextField *targetInput;
 @property (nonatomic, strong) NSTextField *pinInput;
+@property (nonatomic, strong) NSTextField *serverInput;
 @property (nonatomic, assign) nano_session_t *session;
 @end
 
@@ -203,8 +206,11 @@ static void host_ui_state_change(nano_session_t *s, nano_session_state_t state, 
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!g_ui_app || !g_ui_app.statusLabel) return;
         if (state == SESSION_STATE_LISTENING) {
-            g_ui_app.statusLabel.stringValue = @"WAITING FOR CONNECTION...";
+            g_ui_app.statusLabel.stringValue = @"WAITING FOR CONTROLLER...";
             g_ui_app.statusLabel.textColor = [NSColor secondaryLabelColor];
+        } else if (state == SESSION_STATE_CONNECTING) {
+            g_ui_app.statusLabel.stringValue = [NSString stringWithFormat:@"Connecting to server... (%s)", msg ? msg : ""];
+            g_ui_app.statusLabel.textColor = [NSColor systemOrangeColor];
         } else if (state == SESSION_STATE_ACTIVE) {
             g_ui_app.statusLabel.stringValue = [NSString stringWithFormat:@"● REMOTE SESSION ACTIVE (%s)", msg ? msg : ""];
             g_ui_app.statusLabel.textColor = [NSColor systemGreenColor];
@@ -221,7 +227,7 @@ static bool host_ui_approval(nano_session_t *s, const char *remote_ip, void *use
     dispatch_sync(dispatch_get_main_queue(), ^{
         NSAlert *alert = [[NSAlert alloc] init];
         alert.messageText = @"Remote Control Request";
-        alert.informativeText = [NSString stringWithFormat:@"A controller at %s is requesting permission to control your computer.\n\nDo you want to allow this?", remote_ip ? remote_ip : "remote peer"];
+        alert.informativeText = [NSString stringWithFormat:@"A controller (%s) is requesting permission to control your computer.\n\nDo you want to allow this?", remote_ip ? remote_ip : "remote peer"];
         [alert addButtonWithTitle:@"ACCEPT"];
         [alert addButtonWithTitle:@"REJECT"];
         alert.alertStyle = NSAlertStyleCritical;
@@ -232,15 +238,8 @@ static bool host_ui_approval(nano_session_t *s, const char *remote_ip, void *use
     return approved;
 }
 
-void nano_ui_start_host_gui(uint16_t port, const char *pin) {
-    nano_session_t *s = nano_session_create(NANO_ROLE_HOST);
-    g_ui_app.session = s;
-    s->on_state_change = host_ui_state_change;
-    s->on_approval_request = host_ui_approval;
-
-    nano_session_start_host(s, port, pin);
-
-    NSRect frame = NSMakeRect(0, 0, 320, 260);
+static void create_host_window(nano_session_t *s, const char *server_str) {
+    NSRect frame = NSMakeRect(0, 0, 360, 320);
     NSWindow *win = [[NSWindow alloc] initWithContentRect:frame
                                                 styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable)
                                                   backing:NSBackingStoreBuffered
@@ -252,31 +251,58 @@ void nano_ui_start_host_gui(uint16_t port, const char *pin) {
 
     /* App Title */
     NSTextField *title = [NSTextField labelWithString:@"NANOCTRL"];
-    title.frame = NSMakeRect(20, 210, 280, 26);
+    title.frame = NSMakeRect(20, 270, 320, 26);
     title.font = [NSFont systemFontOfSize:20 weight:NSFontWeightHeavy];
     title.alignment = NSTextAlignmentCenter;
     [content addSubview:title];
 
-    /* PIN Display: e.g. "847 291" */
+    /* Device ID Display */
+    char formatted_id[32];
+    nano_format_device_id(s->device_id, formatted_id, sizeof(formatted_id));
+
+    NSTextField *idHeader = [NSTextField labelWithString:@"Your Device ID"];
+    idHeader.frame = NSMakeRect(20, 235, 320, 16);
+    idHeader.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    idHeader.textColor = [NSColor secondaryLabelColor];
+    idHeader.alignment = NSTextAlignmentCenter;
+    [content addSubview:idHeader];
+
+    NSTextField *idView = [NSTextField labelWithString:[NSString stringWithUTF8String:formatted_id]];
+    idView.frame = NSMakeRect(20, 205, 320, 28);
+    idView.font = [NSFont monospacedSystemFontOfSize:24 weight:NSFontWeightBold];
+    idView.alignment = NSTextAlignmentCenter;
+    [content addSubview:idView];
+    g_ui_app.idLabel = idView;
+
+    /* PIN Display */
+    NSTextField *pinHeader = [NSTextField labelWithString:@"One-Time PIN"];
+    pinHeader.frame = NSMakeRect(20, 175, 320, 16);
+    pinHeader.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    pinHeader.textColor = [NSColor secondaryLabelColor];
+    pinHeader.alignment = NSTextAlignmentCenter;
+    [content addSubview:pinHeader];
+
     char formatted_pin[16];
     snprintf(formatted_pin, sizeof(formatted_pin), "%.3s %.3s", s->pin, s->pin + 3);
     NSTextField *pinView = [NSTextField labelWithString:[NSString stringWithUTF8String:formatted_pin]];
-    pinView.frame = NSMakeRect(20, 150, 280, 44);
-    pinView.font = [NSFont monospacedSystemFontOfSize:34 weight:NSFontWeightBold];
+    pinView.frame = NSMakeRect(20, 145, 320, 28);
+    pinView.font = [NSFont monospacedSystemFontOfSize:24 weight:NSFontWeightBold];
     pinView.alignment = NSTextAlignmentCenter;
     [content addSubview:pinView];
     g_ui_app.pinLabel = pinView;
 
-    NSTextField *sub = [NSTextField labelWithString:@"Share this temporary code to allow control"];
-    sub.frame = NSMakeRect(20, 125, 280, 18);
-    sub.font = [NSFont systemFontOfSize:11];
-    sub.textColor = [NSColor secondaryLabelColor];
-    sub.alignment = NSTextAlignmentCenter;
-    [content addSubview:sub];
+    /* Mode / Server Info */
+    NSString *modeStr = server_str ? [NSString stringWithFormat:@"Relay Server: %s", server_str] : [NSString stringWithFormat:@"Direct LAN Mode: port %u", s->port];
+    NSTextField *srvLbl = [NSTextField labelWithString:modeStr];
+    srvLbl.frame = NSMakeRect(20, 115, 320, 16);
+    srvLbl.font = [NSFont systemFontOfSize:10];
+    srvLbl.textColor = [NSColor tertiaryLabelColor];
+    srvLbl.alignment = NSTextAlignmentCenter;
+    [content addSubview:srvLbl];
 
     /* Status */
-    NSTextField *status = [NSTextField labelWithString:@"WAITING FOR CONNECTION..."];
-    status.frame = NSMakeRect(20, 80, 280, 22);
+    NSTextField *status = [NSTextField labelWithString:@"WAITING FOR CONTROLLER..."];
+    status.frame = NSMakeRect(20, 75, 320, 22);
     status.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
     status.alignment = NSTextAlignmentCenter;
     [content addSubview:status];
@@ -284,12 +310,35 @@ void nano_ui_start_host_gui(uint16_t port, const char *pin) {
 
     /* Stop Button */
     NSButton *stopBtn = [NSButton buttonWithTitle:@"[ STOP ]" target:g_ui_app action:@selector(stopSession)];
-    stopBtn.frame = NSMakeRect(100, 30, 120, 32);
+    stopBtn.frame = NSMakeRect(120, 25, 120, 32);
     stopBtn.bezelStyle = NSBezelStyleRounded;
     [content addSubview:stopBtn];
 
     g_ui_app.mainWindow = win;
     [win makeKeyAndOrderFront:nil];
+}
+
+void nano_ui_start_host_gui(uint16_t port, const char *pin) {
+    nano_session_t *s = nano_session_create(NANO_ROLE_HOST);
+    g_ui_app.session = s;
+    s->on_state_change = host_ui_state_change;
+    s->on_approval_request = host_ui_approval;
+
+    nano_session_start_host(s, port, pin);
+    create_host_window(s, NULL);
+}
+
+void nano_ui_start_host_relay_gui(const char *server_host, uint16_t server_port, uint32_t device_id, const char *pin) {
+    nano_session_t *s = nano_session_create(NANO_ROLE_HOST);
+    g_ui_app.session = s;
+    s->on_state_change = host_ui_state_change;
+    s->on_approval_request = host_ui_approval;
+
+    char srv_display[160];
+    snprintf(srv_display, sizeof(srv_display), "%s:%u", server_host ? server_host : "127.0.0.1", server_port > 0 ? server_port : NANO_DEFAULT_PORT);
+
+    nano_session_start_host_relay(s, server_host, server_port, device_id, pin);
+    create_host_window(s, srv_display);
 }
 
 static void controller_ui_state_change(nano_session_t *s, nano_session_state_t state, const char *msg, void *user_data) {
@@ -343,7 +392,7 @@ void nano_ui_start_controller_gui(const char *host, uint16_t port, const char *p
         return;
     }
 
-    NSRect frame = NSMakeRect(0, 0, 320, 240);
+    NSRect frame = NSMakeRect(0, 0, 360, 300);
     NSWindow *win = [[NSWindow alloc] initWithContentRect:frame
                                                 styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable)
                                                   backing:NSBackingStoreBuffered
@@ -354,32 +403,46 @@ void nano_ui_start_controller_gui(const char *host, uint16_t port, const char *p
     NSView *content = win.contentView;
 
     NSTextField *title = [NSTextField labelWithString:@"NANOCTRL"];
-    title.frame = NSMakeRect(20, 195, 280, 26);
+    title.frame = NSMakeRect(20, 255, 320, 26);
     title.font = [NSFont systemFontOfSize:20 weight:NSFontWeightHeavy];
     title.alignment = NSTextAlignmentCenter;
     [content addSubview:title];
 
-    NSTextField *hostLbl = [NSTextField labelWithString:@"Host (IP:Port):"];
-    hostLbl.frame = NSMakeRect(30, 155, 100, 18);
+    /* Target ID or IP:Port */
+    NSTextField *hostLbl = [NSTextField labelWithString:@"Device ID / IP:Port:"];
+    hostLbl.frame = NSMakeRect(20, 215, 140, 18);
     [content addSubview:hostLbl];
 
-    NSTextField *hostField = [[NSTextField alloc] initWithFrame:NSMakeRect(130, 152, 150, 22)];
-    hostField.stringValue = host ? [NSString stringWithFormat:@"%s:%u", host, port] : @"127.0.0.1:7443";
+    NSTextField *hostField = [[NSTextField alloc] initWithFrame:NSMakeRect(165, 212, 175, 22)];
+    hostField.placeholderString = @"e.g. 842 190 345";
+    if (host) hostField.stringValue = [NSString stringWithFormat:@"%s:%u", host, port];
     [content addSubview:hostField];
-    g_ui_app.hostInput = hostField;
+    g_ui_app.targetInput = hostField;
 
+    /* PIN */
     NSTextField *pinLbl = [NSTextField labelWithString:@"6-Digit PIN:"];
-    pinLbl.frame = NSMakeRect(30, 115, 100, 18);
+    pinLbl.frame = NSMakeRect(20, 175, 140, 18);
     [content addSubview:pinLbl];
 
-    NSTextField *pinField = [[NSTextField alloc] initWithFrame:NSMakeRect(130, 112, 150, 22)];
-    pinField.placeholderString = @"e.g. 847291";
+    NSTextField *pinField = [[NSTextField alloc] initWithFrame:NSMakeRect(165, 172, 175, 22)];
+    pinField.placeholderString = @"e.g. 582914";
     if (pin) pinField.stringValue = [NSString stringWithUTF8String:pin];
     [content addSubview:pinField];
     g_ui_app.pinInput = pinField;
 
-    NSTextField *status = [NSTextField labelWithString:@"Enter host details and click Connect."];
-    status.frame = NSMakeRect(20, 75, 280, 18);
+    /* Relay Server (Optional) */
+    NSTextField *srvLbl = [NSTextField labelWithString:@"Relay Server:"];
+    srvLbl.frame = NSMakeRect(20, 135, 140, 18);
+    [content addSubview:srvLbl];
+
+    NSTextField *srvField = [[NSTextField alloc] initWithFrame:NSMakeRect(165, 132, 175, 22)];
+    srvField.placeholderString = @"127.0.0.1:7443";
+    srvField.stringValue = @"127.0.0.1:7443";
+    [content addSubview:srvField];
+    g_ui_app.serverInput = srvField;
+
+    NSTextField *status = [NSTextField labelWithString:@"Enter Target ID & PIN, then click Connect."];
+    status.frame = NSMakeRect(20, 85, 320, 18);
     status.font = [NSFont systemFontOfSize:11];
     status.alignment = NSTextAlignmentCenter;
     status.textColor = [NSColor secondaryLabelColor];
@@ -387,7 +450,7 @@ void nano_ui_start_controller_gui(const char *host, uint16_t port, const char *p
     g_ui_app.statusLabel = status;
 
     NSButton *connBtn = [NSButton buttonWithTitle:@"[ CONNECT ]" target:g_ui_app action:@selector(onConnectClicked)];
-    connBtn.frame = NSMakeRect(90, 25, 140, 32);
+    connBtn.frame = NSMakeRect(110, 30, 140, 34);
     connBtn.bezelStyle = NSBezelStyleRounded;
     [content addSubview:connBtn];
 
@@ -395,11 +458,26 @@ void nano_ui_start_controller_gui(const char *host, uint16_t port, const char *p
     [win makeKeyAndOrderFront:nil];
 }
 
+void nano_ui_start_controller_relay_gui(const char *server_host, uint16_t server_port, uint32_t target_id, const char *pin) {
+    nano_session_t *s = nano_session_create(NANO_ROLE_CONTROLLER);
+    g_ui_app.session = s;
+    s->on_state_change = controller_ui_state_change;
+    s->on_frame_update = controller_ui_frame_update;
+
+    if (server_host && target_id > 0 && pin && strlen(pin) == 6) {
+        nano_session_start_controller_relay(s, server_host, server_port, target_id, pin);
+        return;
+    }
+
+    nano_ui_start_controller_gui(NULL, 0, pin);
+}
+
 @implementation NanoUIApp (Actions)
 
 - (void)onConnectClicked {
-    NSString *hostStr = self.hostInput.stringValue;
+    NSString *targetStr = self.targetInput.stringValue;
     NSString *pinStr = self.pinInput.stringValue;
+    NSString *srvStr = self.serverInput.stringValue;
 
     if (pinStr.length != 6) {
         self.statusLabel.stringValue = @"Please enter a valid 6-digit PIN.";
@@ -407,37 +485,60 @@ void nano_ui_start_controller_gui(const char *host, uint16_t port, const char *p
         return;
     }
 
-    char hostBuf[128] = "127.0.0.1";
-    uint16_t port = NANO_DEFAULT_PORT;
+    if ([targetStr containsString:@":"]) {
+        /* Direct IP:Port */
+        char hostBuf[128] = "127.0.0.1";
+        uint16_t port = NANO_DEFAULT_PORT;
+        NSArray *parts = [targetStr componentsSeparatedByString:@":"];
+        if (parts.count > 0 && [parts[0] length] > 0) {
+            strncpy(hostBuf, [parts[0] UTF8String], sizeof(hostBuf) - 1);
+        }
+        if (parts.count > 1) {
+            port = (uint16_t)[parts[1] intValue];
+        }
 
-    NSArray *parts = [hostStr componentsSeparatedByString:@":"];
-    if (parts.count > 0 && [parts[0] length] > 0) {
-        strncpy(hostBuf, [parts[0] UTF8String], sizeof(hostBuf) - 1);
+        self.statusLabel.stringValue = @"Connecting directly...";
+        self.statusLabel.textColor = [NSColor labelColor];
+        nano_session_start_controller(self.session, hostBuf, port, [pinStr UTF8String]);
+    } else {
+        /* Self-Hosted Relay ID */
+        uint32_t target_id = nano_parse_device_id([targetStr UTF8String]);
+        if (target_id == 0) {
+            self.statusLabel.stringValue = @"Please enter a valid 9-digit Device ID.";
+            self.statusLabel.textColor = [NSColor systemRedColor];
+            return;
+        }
+
+        char srvBuf[128] = "127.0.0.1";
+        uint16_t srvPort = NANO_DEFAULT_PORT;
+        NSArray *sparts = [srvStr componentsSeparatedByString:@":"];
+        if (sparts.count > 0 && [sparts[0] length] > 0) {
+            strncpy(srvBuf, [sparts[0] UTF8String], sizeof(srvBuf) - 1);
+        }
+        if (sparts.count > 1) {
+            srvPort = (uint16_t)[sparts[1] intValue];
+        }
+
+        self.statusLabel.stringValue = @"Connecting via relay server...";
+        self.statusLabel.textColor = [NSColor labelColor];
+        nano_session_start_controller_relay(self.session, srvBuf, srvPort, target_id, [pinStr UTF8String]);
     }
-    if (parts.count > 1) {
-        port = (uint16_t)[parts[1] intValue];
-    }
-
-    self.statusLabel.stringValue = @"Connecting...";
-    self.statusLabel.textColor = [NSColor labelColor];
-
-    nano_session_start_controller(self.session, hostBuf, port, [pinStr UTF8String]);
 }
 
 - (void)launchHost {
     [self.mainWindow close];
-    nano_ui_start_host_gui(NANO_DEFAULT_PORT, NULL);
+    nano_ui_start_host_relay_gui("127.0.0.1", NANO_DEFAULT_PORT, 0, NULL);
 }
 
 - (void)launchController {
     [self.mainWindow close];
-    nano_ui_start_controller_gui("127.0.0.1", NANO_DEFAULT_PORT, NULL);
+    nano_ui_start_controller_gui(NULL, 0, NULL);
 }
 
 @end
 
 static void show_launcher_window(void) {
-    NSRect frame = NSMakeRect(0, 0, 320, 220);
+    NSRect frame = NSMakeRect(0, 0, 340, 240);
     NSWindow *win = [[NSWindow alloc] initWithContentRect:frame
                                                 styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable)
                                                   backing:NSBackingStoreBuffered
@@ -448,25 +549,25 @@ static void show_launcher_window(void) {
     NSView *content = win.contentView;
 
     NSTextField *title = [NSTextField labelWithString:@"NANOCTRL"];
-    title.frame = NSMakeRect(20, 160, 280, 28);
+    title.frame = NSMakeRect(20, 180, 300, 28);
     title.font = [NSFont systemFontOfSize:22 weight:NSFontWeightHeavy];
     title.alignment = NSTextAlignmentCenter;
     [content addSubview:title];
 
     NSTextField *sub = [NSTextField labelWithString:@"Tiny Remote Control, Nothing Else."];
-    sub.frame = NSMakeRect(20, 135, 280, 18);
+    sub.frame = NSMakeRect(20, 155, 300, 18);
     sub.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     sub.textColor = [NSColor secondaryLabelColor];
     sub.alignment = NSTextAlignmentCenter;
     [content addSubview:sub];
 
     NSButton *hostBtn = [NSButton buttonWithTitle:@"Share This Mac (Host)" target:g_ui_app action:@selector(launchHost)];
-    hostBtn.frame = NSMakeRect(50, 80, 220, 36);
+    hostBtn.frame = NSMakeRect(50, 95, 240, 38);
     hostBtn.bezelStyle = NSBezelStyleRounded;
     [content addSubview:hostBtn];
 
     NSButton *ctrlBtn = [NSButton buttonWithTitle:@"Control Remote Computer" target:g_ui_app action:@selector(launchController)];
-    ctrlBtn.frame = NSMakeRect(50, 35, 220, 36);
+    ctrlBtn.frame = NSMakeRect(50, 45, 240, 38);
     ctrlBtn.bezelStyle = NSBezelStyleRounded;
     [content addSubview:ctrlBtn];
 
@@ -513,6 +614,15 @@ int nano_ui_run_host_app(uint16_t port, const char *pin) {
     return 0;
 }
 
+int nano_ui_run_host_relay_app(const char *server_host, uint16_t server_port, uint32_t device_id, const char *pin) {
+    @autoreleasepool {
+        setup_app_menu();
+        nano_ui_start_host_relay_gui(server_host, server_port, device_id, pin);
+        [NSApp run];
+    }
+    return 0;
+}
+
 int nano_ui_run_controller_app(const char *host, uint16_t port, const char *pin) {
     @autoreleasepool {
         setup_app_menu();
@@ -522,3 +632,11 @@ int nano_ui_run_controller_app(const char *host, uint16_t port, const char *pin)
     return 0;
 }
 
+int nano_ui_run_controller_relay_app(const char *server_host, uint16_t server_port, uint32_t target_id, const char *pin) {
+    @autoreleasepool {
+        setup_app_menu();
+        nano_ui_start_controller_relay_gui(server_host, server_port, target_id, pin);
+        [NSApp run];
+    }
+    return 0;
+}

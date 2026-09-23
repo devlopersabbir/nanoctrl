@@ -25,7 +25,16 @@ typedef enum {
     NANO_MSG_KEY            = 0x30,
     NANO_MSG_PING           = 0xF0,
     NANO_MSG_PONG           = 0xF1,
-    NANO_MSG_DISCONNECT     = 0xFF
+    NANO_MSG_DISCONNECT     = 0xFF,
+    /* Server Rendezvous & Relay */
+    NANO_MSG_SRV_REGISTER     = 0x40,
+    NANO_MSG_SRV_REGISTER_ACK = 0x41,
+    NANO_MSG_SRV_CONNECT_REQ  = 0x42,
+    NANO_MSG_SRV_INCOMING     = 0x43,
+    NANO_MSG_SRV_RELAY_JOIN   = 0x44,
+    NANO_MSG_SRV_RELAY_READY  = 0x45,
+    NANO_MSG_SRV_HEARTBEAT    = 0x46,
+    NANO_MSG_SRV_ERROR        = 0x4F
 } nano_msg_type_t;
 
 typedef enum {
@@ -109,6 +118,51 @@ typedef struct {
 typedef struct {
     uint8_t reason;       /* 0: normal, 1: timeout, 2: rejected, 3: error */
 } nano_msg_disconnect_t;
+
+/* Server signaling structures */
+typedef struct {
+    uint32_t device_id;   /* 9-digit Device ID e.g. 842190345 */
+    uint8_t  version;
+    uint8_t  reserved[3];
+} nano_msg_srv_register_t;
+
+typedef struct {
+    uint32_t device_id;
+    uint8_t  status;      /* 0: OK, 1: ID_TAKEN, 2: ERROR */
+    uint8_t  reserved[3];
+} nano_msg_srv_register_ack_t;
+
+typedef struct {
+    uint32_t target_id;   /* Target Host Device ID */
+    uint32_t controller_id;
+} nano_msg_srv_connect_req_t;
+
+typedef struct {
+    uint64_t session_token; /* Unique 64-bit relay room ID */
+    uint32_t controller_id;
+    uint8_t  reserved[4];
+} nano_msg_srv_incoming_t;
+
+typedef struct {
+    uint64_t session_token;
+    uint8_t  role;        /* 0: Host, 1: Controller */
+    uint8_t  reserved[7];
+} nano_msg_srv_relay_join_t;
+
+typedef struct {
+    uint64_t session_token;
+    uint8_t  status;      /* 0: OK, 1: TIMEOUT/ERROR */
+    uint8_t  reserved[7];
+} nano_msg_srv_relay_ready_t;
+
+typedef struct {
+    uint32_t seq;
+} nano_msg_srv_heartbeat_t;
+
+typedef struct {
+    uint8_t  code;        /* 1: NOT_FOUND, 2: OFFLINE, 3: BUSY, 4: INVALID_TOKEN */
+    uint8_t  reserved[3];
+} nano_msg_srv_error_t;
 
 #pragma pack(pop)
 

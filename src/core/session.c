@@ -1,13 +1,31 @@
 #include "session.h"
 #include "../crypto/random.h"
 #include "../crypto/auth.h"
+#include "../net/server.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <poll.h>
 
 #define SCRATCH_BUF_SIZE (NANO_TILE_SIZE * NANO_TILE_SIZE * 4 + 1024)
+
+uint32_t nano_generate_device_id(void) {
+    uint32_t val = 0;
+    nano_random_bytes((uint8_t *)&val, sizeof(val));
+    val = (val % 900000000) + 100000000; /* 9 digits: 100,000,000 - 999,999,999 */
+    return val;
+}
+
+void nano_session_set_device_id(nano_session_t *s, uint32_t id) {
+    if (!s) return;
+    s->device_id = id;
+}
+
+uint32_t nano_session_get_device_id(nano_session_t *s) {
+    return s ? s->device_id : 0;
+}
 
 static void host_frame_captured(const nano_frame_t *frame, void *user_data) {
     nano_session_t *s = (nano_session_t *)user_data;
@@ -96,7 +114,6 @@ static void host_frame_captured(const nano_frame_t *frame, void *user_data) {
             uint32_t total_msg_len = (uint32_t)(sizeof(thdr) + payload_len);
             if (!nano_transport_send_msg(s->conn_sock, NANO_MSG_SCREEN_TILE, flags,
                                          packet_buf, total_msg_len, 200)) {
-                /* Send failed (socket closed/congested) */
                 pthread_mutex_unlock(&s->lock);
                 return;
             }
@@ -109,159 +126,273 @@ static void host_frame_captured(const nano_frame_t *frame, void *user_data) {
     pthread_mutex_unlock(&s->lock);
 }
 
+static void host_handle_client(nano_session_t *s, nano_socket_t client_fd, const char *remote_ip) {
+    /* 1. Recv HELLO */
+    nano_header_t hdr;
+    nano_msg_hello_t hello;
+    if (!nano_transport_recv_msg(client_fd, &hdr, &hello, sizeof(hello), 3000) ||
+        hdr.type != NANO_MSG_HELLO) {
+        nano_socket_close(client_fd);
+        return;
+    }
+
+    /* 2. Send AUTH_CHALLENGE */
+    nano_msg_auth_challenge_t challenge;
+    nano_random_bytes(challenge.nonce, sizeof(challenge.nonce));
+    if (!nano_transport_send_msg(client_fd, NANO_MSG_AUTH_CHALLENGE, NANO_FLAG_NONE,
+                                 &challenge, sizeof(challenge), 2000)) {
+        nano_socket_close(client_fd);
+        return;
+    }
+
+    /* 3. Recv AUTH_RESPONSE */
+    nano_msg_auth_response_t response;
+    if (!nano_transport_recv_msg(client_fd, &hdr, &response, sizeof(response), 3000) ||
+        hdr.type != NANO_MSG_AUTH_RESPONSE) {
+        nano_socket_close(client_fd);
+        return;
+    }
+
+    /* 4. Verify PIN */
+    if (!nano_auth_verify_response(s->pin, challenge.nonce, response.hash)) {
+        nano_msg_auth_result_t res = { .status = 2 }; /* Bad PIN */
+        nano_transport_send_msg(client_fd, NANO_MSG_AUTH_RESULT, NANO_FLAG_NONE, &res, sizeof(res), 1000);
+        nano_socket_close(client_fd);
+        return;
+    }
+
+    /* 5. Host Approval Check */
+    s->state = SESSION_STATE_PENDING_APPROVAL;
+    if (s->on_state_change) {
+        s->on_state_change(s, SESSION_STATE_PENDING_APPROVAL, remote_ip, s->user_data);
+    }
+
+    bool approved = true;
+    if (s->on_approval_request) {
+        approved = s->on_approval_request(s, remote_ip, s->user_data);
+    }
+
+    if (!approved) {
+        nano_msg_auth_result_t res = { .status = 1 }; /* Rejected */
+        nano_transport_send_msg(client_fd, NANO_MSG_AUTH_RESULT, NANO_FLAG_NONE, &res, sizeof(res), 1000);
+        nano_socket_close(client_fd);
+        s->state = SESSION_STATE_LISTENING;
+        if (s->on_state_change) s->on_state_change(s, SESSION_STATE_LISTENING, "Connection rejected. Waiting...", s->user_data);
+        return;
+    }
+
+    /* 6. Approved: Send AUTH_OK */
+    nano_msg_auth_result_t res = { .status = 0 }; /* OK */
+    if (!nano_transport_send_msg(client_fd, NANO_MSG_AUTH_RESULT, NANO_FLAG_NONE, &res, sizeof(res), 2000)) {
+        nano_socket_close(client_fd);
+        return;
+    }
+
+    pthread_mutex_lock(&s->lock);
+    s->conn_sock = client_fd;
+    s->state = SESSION_STATE_ACTIVE;
+    s->screen_header_sent = false;
+    pthread_mutex_unlock(&s->lock);
+
+    if (s->on_state_change) s->on_state_change(s, SESSION_STATE_ACTIVE, remote_ip, s->user_data);
+
+    /* Start screen capture */
+    s->capture = nano_capture_create();
+    nano_capture_start(s->capture, host_frame_captured, s);
+
+    /* Input dispatch loop */
+    uint8_t input_payload[1024];
+    while (s->is_running && s->state == SESSION_STATE_ACTIVE) {
+        if (!nano_transport_recv_header(s->conn_sock, &hdr, 500)) {
+            if (errno == EAGAIN || errno == ETIMEDOUT) continue;
+            break;
+        }
+
+        if (hdr.length > sizeof(input_payload)) break;
+        if (!nano_transport_recv_payload(s->conn_sock, &hdr, input_payload, sizeof(input_payload), 500)) {
+            break;
+        }
+
+        if (hdr.type == NANO_MSG_MOUSE_MOVE && hdr.length == sizeof(nano_msg_mouse_move_t)) {
+            nano_msg_mouse_move_t *m = (nano_msg_mouse_move_t *)input_payload;
+            nano_input_inject_mouse_move(m->norm_x, m->norm_y, s->host_screen_w, s->host_screen_h);
+        } else if (hdr.type == NANO_MSG_MOUSE_BUTTON && hdr.length == sizeof(nano_msg_mouse_button_t)) {
+            nano_msg_mouse_button_t *b = (nano_msg_mouse_button_t *)input_payload;
+            nano_input_inject_mouse_button((nano_mouse_button_t)b->button, (nano_key_action_t)b->action,
+                                           b->norm_x, b->norm_y, s->host_screen_w, s->host_screen_h);
+        } else if (hdr.type == NANO_MSG_MOUSE_SCROLL && hdr.length == sizeof(nano_msg_mouse_scroll_t)) {
+            nano_msg_mouse_scroll_t *sc = (nano_msg_mouse_scroll_t *)input_payload;
+            nano_input_inject_mouse_scroll(sc->dx, sc->dy);
+        } else if (hdr.type == NANO_MSG_KEY && hdr.length == sizeof(nano_msg_key_t)) {
+            nano_msg_key_t *k = (nano_msg_key_t *)input_payload;
+            nano_input_inject_key(k->keycode, (nano_key_action_t)k->action, k->modifiers);
+        } else if (hdr.type == NANO_MSG_DISCONNECT) {
+            break;
+        }
+    }
+
+    /* Clean up active session */
+    if (s->capture) {
+        nano_capture_destroy(s->capture);
+        s->capture = NULL;
+    }
+
+    pthread_mutex_lock(&s->lock);
+    nano_socket_close(s->conn_sock);
+    s->conn_sock = NANO_INVALID_SOCKET;
+    nano_frame_free(&s->host_prev_frame);
+    s->state = SESSION_STATE_LISTENING;
+    pthread_mutex_unlock(&s->lock);
+
+    if (s->on_state_change) s->on_state_change(s, SESSION_STATE_LISTENING, "Client disconnected. Waiting...", s->user_data);
+}
+
 static void *host_thread_func(void *arg) {
     nano_session_t *s = (nano_session_t *)arg;
 
-    s->listen_sock = nano_socket_create();
-    if (!nano_socket_is_valid(s->listen_sock)) {
-        if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Failed to create socket", s->user_data);
-        return NULL;
-    }
+    if (s->is_relay) {
+        /* Self-Hosted Relay Mode */
+        s->state = SESSION_STATE_CONNECTING;
+        if (s->on_state_change) s->on_state_change(s, SESSION_STATE_CONNECTING, "Connecting to relay server...", s->user_data);
 
-    if (!nano_socket_bind_listen(s->listen_sock, "0.0.0.0", s->port, 5)) {
-        if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Failed to bind to port", s->user_data);
-        nano_socket_close(s->listen_sock);
-        s->listen_sock = NANO_INVALID_SOCKET;
-        return NULL;
-    }
+        while (s->is_running) {
+            s->server_control_sock = nano_socket_create();
+            if (!nano_socket_is_valid(s->server_control_sock)) {
+                sleep(2);
+                continue;
+            }
 
-    s->state = SESSION_STATE_LISTENING;
-    if (s->on_state_change) s->on_state_change(s, SESSION_STATE_LISTENING, "Waiting for controller connection...", s->user_data);
+            if (!nano_socket_connect(s->server_control_sock, s->server_host, s->server_port, 5000)) {
+                nano_socket_close(s->server_control_sock);
+                s->server_control_sock = NANO_INVALID_SOCKET;
+                if (s->on_state_change) s->on_state_change(s, SESSION_STATE_CONNECTING, "Reconnecting to server...", s->user_data);
+                sleep(2);
+                continue;
+            }
 
-    while (s->is_running) {
-        char client_ip[64] = {0};
-        uint16_t client_port = 0;
-        nano_socket_t client_fd = nano_socket_accept(s->listen_sock, client_ip, sizeof(client_ip), &client_port);
-        if (!nano_socket_is_valid(client_fd)) {
-            if (!s->is_running) break;
-            usleep(50000);
-            continue;
-        }
+            /* Register Device ID */
+            nano_msg_srv_register_t reg = { .device_id = s->device_id, .version = NANO_VERSION };
+            if (!nano_transport_send_msg(s->server_control_sock, NANO_MSG_SRV_REGISTER, NANO_FLAG_NONE, &reg, sizeof(reg), 3000)) {
+                nano_socket_close(s->server_control_sock);
+                s->server_control_sock = NANO_INVALID_SOCKET;
+                sleep(2);
+                continue;
+            }
 
-        /* 1. Recv HELLO */
-        nano_header_t hdr;
-        nano_msg_hello_t hello;
-        if (!nano_transport_recv_msg(client_fd, &hdr, &hello, sizeof(hello), 3000) ||
-            hdr.type != NANO_MSG_HELLO) {
-            nano_socket_close(client_fd);
-            continue;
-        }
+            nano_header_t ack_hdr;
+            nano_msg_srv_register_ack_t ack;
+            if (!nano_transport_recv_msg(s->server_control_sock, &ack_hdr, &ack, sizeof(ack), 3000) ||
+                ack_hdr.type != NANO_MSG_SRV_REGISTER_ACK || ack.status != 0) {
+                nano_socket_close(s->server_control_sock);
+                s->server_control_sock = NANO_INVALID_SOCKET;
+                sleep(2);
+                continue;
+            }
 
-        /* 2. Send AUTH_CHALLENGE */
-        nano_msg_auth_challenge_t challenge;
-        nano_random_bytes(challenge.nonce, sizeof(challenge.nonce));
-        if (!nano_transport_send_msg(client_fd, NANO_MSG_AUTH_CHALLENGE, NANO_FLAG_NONE,
-                                     &challenge, sizeof(challenge), 2000)) {
-            nano_socket_close(client_fd);
-            continue;
-        }
-
-        /* 3. Recv AUTH_RESPONSE */
-        nano_msg_auth_response_t response;
-        if (!nano_transport_recv_msg(client_fd, &hdr, &response, sizeof(response), 3000) ||
-            hdr.type != NANO_MSG_AUTH_RESPONSE) {
-            nano_socket_close(client_fd);
-            continue;
-        }
-
-        /* 4. Verify PIN */
-        if (!nano_auth_verify_response(s->pin, challenge.nonce, response.hash)) {
-            nano_msg_auth_result_t res = { .status = 2 }; /* Bad PIN */
-            nano_transport_send_msg(client_fd, NANO_MSG_AUTH_RESULT, NANO_FLAG_NONE, &res, sizeof(res), 1000);
-            nano_socket_close(client_fd);
-            continue;
-        }
-
-        /* 5. Host Approval Check */
-        s->state = SESSION_STATE_PENDING_APPROVAL;
-        if (s->on_state_change) {
-            s->on_state_change(s, SESSION_STATE_PENDING_APPROVAL, client_ip, s->user_data);
-        }
-
-        bool approved = true;
-        if (s->on_approval_request) {
-            approved = s->on_approval_request(s, client_ip, s->user_data);
-        }
-
-        if (!approved) {
-            nano_msg_auth_result_t res = { .status = 1 }; /* Rejected */
-            nano_transport_send_msg(client_fd, NANO_MSG_AUTH_RESULT, NANO_FLAG_NONE, &res, sizeof(res), 1000);
-            nano_socket_close(client_fd);
             s->state = SESSION_STATE_LISTENING;
-            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_LISTENING, "Connection rejected. Waiting...", s->user_data);
-            continue;
-        }
+            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_LISTENING, "Registered with relay server. Waiting...", s->user_data);
 
-        /* 6. Approved: Send AUTH_OK */
-        nano_msg_auth_result_t res = { .status = 0 }; /* OK */
-        if (!nano_transport_send_msg(client_fd, NANO_MSG_AUTH_RESULT, NANO_FLAG_NONE, &res, sizeof(res), 2000)) {
-            nano_socket_close(client_fd);
-            continue;
-        }
+            /* Poll loop on control connection */
+            while (s->is_running && nano_socket_is_valid(s->server_control_sock)) {
+                struct pollfd pfd = { .fd = s->server_control_sock, .events = POLLIN, .revents = 0 };
+                int ret = poll(&pfd, 1, 3000);
 
-        pthread_mutex_lock(&s->lock);
-        s->conn_sock = client_fd;
-        s->state = SESSION_STATE_ACTIVE;
-        s->screen_header_sent = false;
-        pthread_mutex_unlock(&s->lock);
+                if (ret == 0) {
+                    /* Heartbeat */
+                    nano_msg_srv_heartbeat_t hb = { .seq = 1 };
+                    if (!nano_transport_send_msg(s->server_control_sock, NANO_MSG_SRV_HEARTBEAT, NANO_FLAG_NONE, &hb, sizeof(hb), 1000)) {
+                        break;
+                    }
+                    continue;
+                }
 
-        if (s->on_state_change) s->on_state_change(s, SESSION_STATE_ACTIVE, client_ip, s->user_data);
+                if (ret < 0) {
+                    if (errno == EINTR) continue;
+                    break;
+                }
 
-        /* Start screen capture */
-        s->capture = nano_capture_create();
-        nano_capture_start(s->capture, host_frame_captured, s);
+                nano_header_t in_hdr;
+                if (!nano_transport_recv_header(s->server_control_sock, &in_hdr, 1000)) {
+                    break;
+                }
 
-        /* Input dispatch loop */
-        uint8_t input_payload[1024];
-        while (s->is_running && s->state == SESSION_STATE_ACTIVE) {
-            if (!nano_transport_recv_header(s->conn_sock, &hdr, 500)) {
-                /* Timeout or disconnect */
-                if (errno == EAGAIN || errno == ETIMEDOUT) continue;
-                break;
+                if (in_hdr.type == NANO_MSG_SRV_INCOMING && in_hdr.length >= sizeof(nano_msg_srv_incoming_t)) {
+                    nano_msg_srv_incoming_t inc;
+                    if (!nano_transport_recv_payload(s->server_control_sock, &in_hdr, &inc, sizeof(inc), 1000)) {
+                        break;
+                    }
+
+                    /* Open a new data channel socket to relay server */
+                    nano_socket_t relay_sock = nano_socket_create();
+                    if (!nano_socket_is_valid(relay_sock)) continue;
+
+                    if (!nano_socket_connect(relay_sock, s->server_host, s->server_port, 4000)) {
+                        nano_socket_close(relay_sock);
+                        continue;
+                    }
+
+                    nano_msg_srv_relay_join_t join = { .session_token = inc.session_token, .role = 0 }; /* Host */
+                    if (!nano_transport_send_msg(relay_sock, NANO_MSG_SRV_RELAY_JOIN, NANO_FLAG_NONE, &join, sizeof(join), 2000)) {
+                        nano_socket_close(relay_sock);
+                        continue;
+                    }
+
+                    nano_header_t rdy_hdr;
+                    nano_msg_srv_relay_ready_t rdy;
+                    if (!nano_transport_recv_msg(relay_sock, &rdy_hdr, &rdy, sizeof(rdy), 5000) ||
+                        rdy_hdr.type != NANO_MSG_SRV_RELAY_READY || rdy.status != 0) {
+                        nano_socket_close(relay_sock);
+                        continue;
+                    }
+
+                    /* Handle client via established relay socket */
+                    host_handle_client(s, relay_sock, "Relay Client");
+                } else if (in_hdr.type == NANO_MSG_SRV_HEARTBEAT) {
+                    nano_msg_srv_heartbeat_t hb;
+                    nano_transport_recv_payload(s->server_control_sock, &in_hdr, &hb, sizeof(hb), 200);
+                }
             }
 
-            if (hdr.length > sizeof(input_payload)) break;
-            if (!nano_transport_recv_payload(s->conn_sock, &hdr, input_payload, sizeof(input_payload), 500)) {
-                break;
-            }
-
-            if (hdr.type == NANO_MSG_MOUSE_MOVE && hdr.length == sizeof(nano_msg_mouse_move_t)) {
-                nano_msg_mouse_move_t *m = (nano_msg_mouse_move_t *)input_payload;
-                nano_input_inject_mouse_move(m->norm_x, m->norm_y, s->host_screen_w, s->host_screen_h);
-            } else if (hdr.type == NANO_MSG_MOUSE_BUTTON && hdr.length == sizeof(nano_msg_mouse_button_t)) {
-                nano_msg_mouse_button_t *b = (nano_msg_mouse_button_t *)input_payload;
-                nano_input_inject_mouse_button((nano_mouse_button_t)b->button, (nano_key_action_t)b->action,
-                                               b->norm_x, b->norm_y, s->host_screen_w, s->host_screen_h);
-            } else if (hdr.type == NANO_MSG_MOUSE_SCROLL && hdr.length == sizeof(nano_msg_mouse_scroll_t)) {
-                nano_msg_mouse_scroll_t *sc = (nano_msg_mouse_scroll_t *)input_payload;
-                nano_input_inject_mouse_scroll(sc->dx, sc->dy);
-            } else if (hdr.type == NANO_MSG_KEY && hdr.length == sizeof(nano_msg_key_t)) {
-                nano_msg_key_t *k = (nano_msg_key_t *)input_payload;
-                nano_input_inject_key(k->keycode, (nano_key_action_t)k->action, k->modifiers);
-            } else if (hdr.type == NANO_MSG_DISCONNECT) {
-                break;
+            if (nano_socket_is_valid(s->server_control_sock)) {
+                nano_socket_close(s->server_control_sock);
+                s->server_control_sock = NANO_INVALID_SOCKET;
             }
         }
-
-        /* Clean up active session */
-        if (s->capture) {
-            nano_capture_destroy(s->capture);
-            s->capture = NULL;
+    } else {
+        /* Direct LAN Mode */
+        s->listen_sock = nano_socket_create();
+        if (!nano_socket_is_valid(s->listen_sock)) {
+            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Failed to create socket", s->user_data);
+            return NULL;
         }
 
-        pthread_mutex_lock(&s->lock);
-        nano_socket_close(s->conn_sock);
-        s->conn_sock = NANO_INVALID_SOCKET;
-        nano_frame_free(&s->host_prev_frame);
+        if (!nano_socket_bind_listen(s->listen_sock, "0.0.0.0", s->port, 5)) {
+            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Failed to bind to port", s->user_data);
+            nano_socket_close(s->listen_sock);
+            s->listen_sock = NANO_INVALID_SOCKET;
+            return NULL;
+        }
+
         s->state = SESSION_STATE_LISTENING;
-        pthread_mutex_unlock(&s->lock);
+        if (s->on_state_change) s->on_state_change(s, SESSION_STATE_LISTENING, "Waiting for controller connection...", s->user_data);
 
-        if (s->on_state_change) s->on_state_change(s, SESSION_STATE_LISTENING, "Client disconnected. Waiting...", s->user_data);
-    }
+        while (s->is_running) {
+            char client_ip[64] = {0};
+            uint16_t client_port = 0;
+            nano_socket_t client_fd = nano_socket_accept(s->listen_sock, client_ip, sizeof(client_ip), &client_port);
+            if (!nano_socket_is_valid(client_fd)) {
+                if (!s->is_running) break;
+                usleep(50000);
+                continue;
+            }
 
-    if (nano_socket_is_valid(s->listen_sock)) {
-        nano_socket_close(s->listen_sock);
-        s->listen_sock = NANO_INVALID_SOCKET;
+            host_handle_client(s, client_fd, client_ip);
+        }
+
+        if (nano_socket_is_valid(s->listen_sock)) {
+            nano_socket_close(s->listen_sock);
+            s->listen_sock = NANO_INVALID_SOCKET;
+        }
     }
 
     s->state = SESSION_STATE_DISCONNECTED;
@@ -273,21 +404,112 @@ static void *controller_thread_func(void *arg) {
     nano_session_t *s = (nano_session_t *)arg;
 
     s->state = SESSION_STATE_CONNECTING;
-    if (s->on_state_change) s->on_state_change(s, SESSION_STATE_CONNECTING, "Connecting to host...", s->user_data);
+    if (s->on_state_change) s->on_state_change(s, SESSION_STATE_CONNECTING, "Connecting...", s->user_data);
 
-    s->conn_sock = nano_socket_create();
-    if (!nano_socket_is_valid(s->conn_sock)) {
-        s->state = SESSION_STATE_DISCONNECTED;
-        if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Socket error", s->user_data);
-        return NULL;
-    }
+    if (s->is_relay) {
+        /* Connect to relay server */
+        nano_socket_t req_sock = nano_socket_create();
+        if (!nano_socket_is_valid(req_sock)) {
+            s->state = SESSION_STATE_DISCONNECTED;
+            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Socket error", s->user_data);
+            return NULL;
+        }
 
-    if (!nano_socket_connect(s->conn_sock, s->remote_host, s->port, 5000)) {
-        s->state = SESSION_STATE_DISCONNECTED;
-        if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Connection failed or timed out", s->user_data);
-        nano_socket_close(s->conn_sock);
-        s->conn_sock = NANO_INVALID_SOCKET;
-        return NULL;
+        if (!nano_socket_connect(req_sock, s->server_host, s->server_port, 5000)) {
+            s->state = SESSION_STATE_DISCONNECTED;
+            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Failed to connect to relay server", s->user_data);
+            nano_socket_close(req_sock);
+            return NULL;
+        }
+
+        /* Send CONNECT_REQ */
+        nano_msg_srv_connect_req_t req = { .target_id = s->target_device_id, .controller_id = 0 };
+        if (!nano_transport_send_msg(req_sock, NANO_MSG_SRV_CONNECT_REQ, NANO_FLAG_NONE, &req, sizeof(req), 2000)) {
+            s->state = SESSION_STATE_DISCONNECTED;
+            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Signaling request failed", s->user_data);
+            nano_socket_close(req_sock);
+            return NULL;
+        }
+
+        nano_header_t hdr;
+        uint8_t buf[256];
+        if (!nano_transport_recv_msg(req_sock, &hdr, buf, sizeof(buf), 5000)) {
+            s->state = SESSION_STATE_DISCONNECTED;
+            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Server response timed out", s->user_data);
+            nano_socket_close(req_sock);
+            return NULL;
+        }
+
+        if (hdr.type == NANO_MSG_SRV_ERROR) {
+            nano_msg_srv_error_t *err = (nano_msg_srv_error_t *)buf;
+            const char *msg = (err->code == 2) ? "Remote Host is Offline" :
+                              (err->code == 3) ? "Relay Server is Busy" : "Host ID Not Found";
+            s->state = SESSION_STATE_DISCONNECTED;
+            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, msg, s->user_data);
+            nano_socket_close(req_sock);
+            return NULL;
+        }
+
+        if (hdr.type != NANO_MSG_SRV_INCOMING || hdr.length < sizeof(nano_msg_srv_incoming_t)) {
+            s->state = SESSION_STATE_DISCONNECTED;
+            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Invalid server response", s->user_data);
+            nano_socket_close(req_sock);
+            return NULL;
+        }
+
+        nano_msg_srv_incoming_t *inc = (nano_msg_srv_incoming_t *)buf;
+        uint64_t session_token = inc->session_token;
+        nano_socket_close(req_sock);
+
+        /* Connect data socket to relay room */
+        s->conn_sock = nano_socket_create();
+        if (!nano_socket_is_valid(s->conn_sock)) {
+            s->state = SESSION_STATE_DISCONNECTED;
+            return NULL;
+        }
+
+        if (!nano_socket_connect(s->conn_sock, s->server_host, s->server_port, 5000)) {
+            s->state = SESSION_STATE_DISCONNECTED;
+            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Failed to connect relay data channel", s->user_data);
+            nano_socket_close(s->conn_sock);
+            s->conn_sock = NANO_INVALID_SOCKET;
+            return NULL;
+        }
+
+        nano_msg_srv_relay_join_t join = { .session_token = session_token, .role = 1 }; /* Controller */
+        if (!nano_transport_send_msg(s->conn_sock, NANO_MSG_SRV_RELAY_JOIN, NANO_FLAG_NONE, &join, sizeof(join), 2000)) {
+            s->state = SESSION_STATE_DISCONNECTED;
+            nano_socket_close(s->conn_sock);
+            s->conn_sock = NANO_INVALID_SOCKET;
+            return NULL;
+        }
+
+        nano_header_t rdy_hdr;
+        nano_msg_srv_relay_ready_t rdy;
+        if (!nano_transport_recv_msg(s->conn_sock, &rdy_hdr, &rdy, sizeof(rdy), 8000) ||
+            rdy_hdr.type != NANO_MSG_SRV_RELAY_READY || rdy.status != 0) {
+            s->state = SESSION_STATE_DISCONNECTED;
+            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Relay pairing timed out", s->user_data);
+            nano_socket_close(s->conn_sock);
+            s->conn_sock = NANO_INVALID_SOCKET;
+            return NULL;
+        }
+    } else {
+        /* Direct LAN Mode */
+        s->conn_sock = nano_socket_create();
+        if (!nano_socket_is_valid(s->conn_sock)) {
+            s->state = SESSION_STATE_DISCONNECTED;
+            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Socket error", s->user_data);
+            return NULL;
+        }
+
+        if (!nano_socket_connect(s->conn_sock, s->remote_host, s->port, 5000)) {
+            s->state = SESSION_STATE_DISCONNECTED;
+            if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Connection failed or timed out", s->user_data);
+            nano_socket_close(s->conn_sock);
+            s->conn_sock = NANO_INVALID_SOCKET;
+            return NULL;
+        }
     }
 
     /* 1. Send HELLO */
@@ -296,6 +518,7 @@ static void *controller_thread_func(void *arg) {
         s->state = SESSION_STATE_DISCONNECTED;
         if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Failed to send hello", s->user_data);
         nano_socket_close(s->conn_sock);
+        s->conn_sock = NANO_INVALID_SOCKET;
         return NULL;
     }
 
@@ -307,6 +530,7 @@ static void *controller_thread_func(void *arg) {
         s->state = SESSION_STATE_DISCONNECTED;
         if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Failed to receive challenge", s->user_data);
         nano_socket_close(s->conn_sock);
+        s->conn_sock = NANO_INVALID_SOCKET;
         return NULL;
     }
 
@@ -317,6 +541,7 @@ static void *controller_thread_func(void *arg) {
         s->state = SESSION_STATE_DISCONNECTED;
         if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Failed to send auth response", s->user_data);
         nano_socket_close(s->conn_sock);
+        s->conn_sock = NANO_INVALID_SOCKET;
         return NULL;
     }
 
@@ -327,6 +552,7 @@ static void *controller_thread_func(void *arg) {
         s->state = SESSION_STATE_DISCONNECTED;
         if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, "Authentication response timed out", s->user_data);
         nano_socket_close(s->conn_sock);
+        s->conn_sock = NANO_INVALID_SOCKET;
         return NULL;
     }
 
@@ -336,6 +562,7 @@ static void *controller_thread_func(void *arg) {
         s->state = SESSION_STATE_DISCONNECTED;
         if (s->on_state_change) s->on_state_change(s, SESSION_STATE_DISCONNECTED, err_msg, s->user_data);
         nano_socket_close(s->conn_sock);
+        s->conn_sock = NANO_INVALID_SOCKET;
         return NULL;
     }
 
@@ -407,8 +634,10 @@ nano_session_t *nano_session_create(nano_role_t role) {
     if (!s) return NULL;
     s->role = role;
     s->state = SESSION_STATE_IDLE;
+    s->device_id = nano_generate_device_id();
     s->listen_sock = NANO_INVALID_SOCKET;
     s->conn_sock = NANO_INVALID_SOCKET;
+    s->server_control_sock = NANO_INVALID_SOCKET;
     pthread_mutex_init(&s->lock, NULL);
     return s;
 }
@@ -428,7 +657,36 @@ void nano_session_destroy(nano_session_t *s) {
 
 bool nano_session_start_host(nano_session_t *s, uint16_t port, const char *custom_pin) {
     if (!s || s->role != NANO_ROLE_HOST) return false;
+    s->is_relay = false;
     s->port = port > 0 ? port : NANO_DEFAULT_PORT;
+
+    if (custom_pin && strlen(custom_pin) == 6) {
+        strncpy(s->pin, custom_pin, 6);
+        s->pin[6] = '\0';
+    } else {
+        nano_random_pin(s->pin);
+    }
+
+    s->is_running = true;
+    if (pthread_create(&s->thread, NULL, host_thread_func, s) != 0) {
+        s->is_running = false;
+        return false;
+    }
+
+    return true;
+}
+
+bool nano_session_start_host_relay(nano_session_t *s, const char *server_host, uint16_t server_port, uint32_t custom_id, const char *custom_pin) {
+    if (!s || s->role != NANO_ROLE_HOST || !server_host) return false;
+    s->is_relay = true;
+    strncpy(s->server_host, server_host, sizeof(s->server_host) - 1);
+    s->server_port = server_port > 0 ? server_port : NANO_DEFAULT_PORT;
+
+    if (custom_id > 0) {
+        s->device_id = custom_id;
+    } else if (s->device_id == 0) {
+        s->device_id = nano_generate_device_id();
+    }
 
     if (custom_pin && strlen(custom_pin) == 6) {
         strncpy(s->pin, custom_pin, 6);
@@ -448,8 +706,27 @@ bool nano_session_start_host(nano_session_t *s, uint16_t port, const char *custo
 
 bool nano_session_start_controller(nano_session_t *s, const char *host, uint16_t port, const char *pin) {
     if (!s || s->role != NANO_ROLE_CONTROLLER || !host || !pin) return false;
+    s->is_relay = false;
     strncpy(s->remote_host, host, sizeof(s->remote_host) - 1);
     s->port = port > 0 ? port : NANO_DEFAULT_PORT;
+    strncpy(s->pin, pin, 6);
+    s->pin[6] = '\0';
+
+    s->is_running = true;
+    if (pthread_create(&s->thread, NULL, controller_thread_func, s) != 0) {
+        s->is_running = false;
+        return false;
+    }
+
+    return true;
+}
+
+bool nano_session_start_controller_relay(nano_session_t *s, const char *server_host, uint16_t server_port, uint32_t target_device_id, const char *pin) {
+    if (!s || s->role != NANO_ROLE_CONTROLLER || !server_host || !pin) return false;
+    s->is_relay = true;
+    strncpy(s->server_host, server_host, sizeof(s->server_host) - 1);
+    s->server_port = server_port > 0 ? server_port : NANO_DEFAULT_PORT;
+    s->target_device_id = target_device_id;
     strncpy(s->pin, pin, 6);
     s->pin[6] = '\0';
 
@@ -505,6 +782,11 @@ void nano_session_stop(nano_session_t *s) {
     if (nano_socket_is_valid(s->listen_sock)) {
         nano_socket_close(s->listen_sock);
         s->listen_sock = NANO_INVALID_SOCKET;
+    }
+
+    if (nano_socket_is_valid(s->server_control_sock)) {
+        nano_socket_close(s->server_control_sock);
+        s->server_control_sock = NANO_INVALID_SOCKET;
     }
 
     pthread_join(s->thread, NULL);

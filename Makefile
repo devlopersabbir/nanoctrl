@@ -18,7 +18,7 @@ FRAMEWORKS = -framework Cocoa -framework ScreenCaptureKit -framework CoreGraphic
 LDFLAGS = -flto -Wl,-dead_strip $(FRAMEWORKS)
 
 SRC_CORE = src/core/protocol.c src/core/session.c
-SRC_NET  = src/net/socket.c src/net/transport.c
+SRC_NET  = src/net/socket.c src/net/transport.c src/net/server.c
 SRC_SCR  = src/screen/capture.c src/screen/diff.c
 SRC_CRY  = src/crypto/random.c src/crypto/auth.c
 SRC_PLAT = src/platform/macos/screen_mac.m src/platform/macos/input_mac.m src/platform/macos/ui_mac.m
@@ -28,6 +28,7 @@ SRCS = $(SRC_CORE) $(SRC_NET) $(SRC_SCR) $(SRC_CRY) $(SRC_PLAT) $(SRC_MAIN)
 OBJS = $(patsubst src/%.c, build/obj/%.o, $(filter %.c, $(SRCS))) $(patsubst src/%.m, build/obj/%.o, $(filter %.m, $(SRCS)))
 
 TARGET = build/nanoctrl
+SERVER_TARGET = build/nanosrv
 TARGET_UNIVERSAL = build/nanoctrl-universal
 TARGET_ARM64 = build/nanoctrl-arm64
 TARGET_X86_64 = build/nanoctrl-x86_64
@@ -38,14 +39,21 @@ APP_CONTENTS = $(APP_BUNDLE)/Contents
 APP_MACOS = $(APP_CONTENTS)/MacOS
 APP_RESOURCES = $(APP_CONTENTS)/Resources
 
-.PHONY: all clean test size version check-version universal arm64 x86_64 bundle dmg
+.PHONY: all clean test size version check-version universal arm64 x86_64 bundle dmg server
 
-all: $(TARGET) size
+all: $(TARGET) $(SERVER_TARGET) size
 
 $(TARGET): $(OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) -o $@
 	@strip $@
+
+$(SERVER_TARGET): src/server/nanosrv_main.c src/net/server.c src/net/socket.c src/net/transport.c src/core/protocol.c src/crypto/random.c src/crypto/auth.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) $^ -lpthread -o $@
+	@strip $@
+
+server: $(SERVER_TARGET)
 
 build/obj/%.o: src/%.c
 	@mkdir -p $(dir $@)
@@ -118,22 +126,23 @@ check-version:
 	@echo "$(VERSION)" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$$' > /dev/null || \
 		(echo "Error: '$(VERSION)' is not a valid Semantic Version (MAJOR.MINOR.PATCH)" && exit 1)
 
-size: $(TARGET)
+size: $(TARGET) $(SERVER_TARGET)
 	@echo "========================================"
 	@echo "     NANOCTRL SIZE REPORT (v$(VERSION))  "
 	@echo "========================================"
-	@ls -lh $(TARGET) | awk '{printf "Binary size: %s (Target: < 2.0 MB)\n", $$5}'
-	@size $(TARGET) || true
+	@ls -lh $(TARGET) | awk '{printf "App binary size:    %s (Target: < 2.0 MB)\n", $$5}'
+	@ls -lh $(SERVER_TARGET) | awk '{printf "Server binary size: %s (Target: < 100 KB)\n", $$5}'
 	@echo "========================================"
 
 # Test targets
 COMMON_TEST_SRCS = $(SRC_CORE) $(SRC_NET) $(SRC_SCR) $(SRC_CRY) src/platform/macos/screen_mac.m src/platform/macos/input_mac.m
 
-test: test_protocol test_diff test_loopback
+test: test_protocol test_diff test_loopback test_relay
 	@echo "\n=== Running All Unit and Integration Tests ==="
 	@build/test_protocol
 	@build/test_diff
 	@build/test_loopback
+	@build/test_relay
 	@echo "\n>>> ALL TESTS PASSED SUCCESSFULLY! <<<\n"
 
 test_protocol: tests/test_protocol.c src/core/protocol.c
@@ -145,6 +154,10 @@ test_diff: tests/test_diff.c src/screen/diff.c src/screen/capture.c src/core/pro
 	$(CC) $(CFLAGS) $(INCLUDES) $^ -o build/$@
 
 test_loopback: tests/test_loopback.c $(COMMON_TEST_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o build/$@
+
+test_relay: tests/test_relay.c $(COMMON_TEST_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o build/$@
 

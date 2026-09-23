@@ -11,9 +11,13 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <poll.h>
+#include <signal.h>
 
 bool nano_net_init(void) {
-    return true; /* No-op on POSIX */
+#ifndef _WIN32
+    signal(SIGPIPE, SIG_IGN);
+#endif
+    return true;
 }
 
 void nano_net_cleanup(void) {
@@ -25,6 +29,10 @@ nano_socket_t nano_socket_create(void) {
     if (sock < 0) return NANO_INVALID_SOCKET;
     int opt = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#ifdef SO_NOSIGPIPE
+    int set = 1;
+    setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int));
+#endif
     nano_socket_set_nodelay(sock, true);
     return sock;
 }

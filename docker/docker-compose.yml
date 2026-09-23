@@ -1,0 +1,16 @@
+services:
+  nanosrv:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: nanoctrl-relay-server
+    restart: unless-stopped
+    ports:
+      - "7443:7443/tcp"
+    environment:
+      - PORT=7443
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
