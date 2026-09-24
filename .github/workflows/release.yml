@@ -381,22 +381,22 @@ jobs:
           ### 🍏 macOS (Desktop & CLI)
           | Package | Description | Architecture | Size |
           |:---|:---|:---|:---|
-          | **[`NANOCTRL-${TAG}-macos.dmg`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/NANOCTRL-${TAG}-macos.dmg)** | **macOS Installer (Recommended)** | Universal (M1/M2/M3/M4 & Intel) | **${SIZE_DMG}** |
-          | [`NANOCTRL-${TAG}-macos.app.zip`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/NANOCTRL-${TAG}-macos.app.zip) | Signed Application Bundle | Universal | ${SIZE_APP_ZIP} |
-          | [`nanoctrl-${TAG}-macos-universal.tar.gz`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/nanoctrl-${TAG}-macos-universal.tar.gz) | Client Command Line Binary | Universal | ${SIZE_MAC_CLI} |
-          | [`nanosrv-${TAG}-macos-universal.tar.gz`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/nanosrv-${TAG}-macos-universal.tar.gz) | Self-Hosted Relay Server | Universal | ${SIZE_MAC_SRV} |
+          | **[\`NANOCTRL-${TAG}-macos.dmg\`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/NANOCTRL-${TAG}-macos.dmg)** | **macOS Installer (Recommended)** | Universal (M1/M2/M3/M4 & Intel) | **${SIZE_DMG}** |
+          | [\`NANOCTRL-${TAG}-macos.app.zip\`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/NANOCTRL-${TAG}-macos.app.zip) | Signed Application Bundle | Universal | ${SIZE_APP_ZIP} |
+          | [\`nanoctrl-${TAG}-macos-universal.tar.gz\`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/nanoctrl-${TAG}-macos-universal.tar.gz) | Client Command Line Binary | Universal | ${SIZE_MAC_CLI} |
+          | [\`nanosrv-${TAG}-macos-universal.tar.gz\`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/nanosrv-${TAG}-macos-universal.tar.gz) | Self-Hosted Relay Server | Universal | ${SIZE_MAC_SRV} |
 
           ### 🐧 Linux & Unix-like (Self-Hosted Server)
           | Package | Description | Architecture | Size |
           |:---|:---|:---|:---|
-          | **[`nanosrv-${TAG}-linux-x86_64.tar.gz`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/nanosrv-${TAG}-linux-x86_64.tar.gz)** | Linux Server + Systemd Unit | x86_64 (amd64) | **${SIZE_LINUX_X64}** |
-          | **[`nanosrv-${TAG}-linux-arm64.tar.gz`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/nanosrv-${TAG}-linux-arm64.tar.gz)** | Linux Server (Raspberry Pi 4/5, Graviton) | aarch64 (arm64) | **${SIZE_LINUX_ARM64}** |
-          | [`nanosrv-${TAG}-linux-armv7.tar.gz`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/nanosrv-${TAG}-linux-armv7.tar.gz) | Linux Server (Raspberry Pi 2/3) | armv7 | ${SIZE_LINUX_ARMV7} |
+          | **[\`nanosrv-${TAG}-linux-x86_64.tar.gz\`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/nanosrv-${TAG}-linux-x86_64.tar.gz)** | Linux Server + Systemd Unit | x86_64 (amd64) | **${SIZE_LINUX_X64}** |
+          | **[\`nanosrv-${TAG}-linux-arm64.tar.gz\`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/nanosrv-${TAG}-linux-arm64.tar.gz)** | Linux Server (Raspberry Pi 4/5, Graviton) | aarch64 (arm64) | **${SIZE_LINUX_ARM64}** |
+          | [\`nanosrv-${TAG}-linux-armv7.tar.gz\`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/nanosrv-${TAG}-linux-armv7.tar.gz) | Linux Server (Raspberry Pi 2/3) | armv7 | ${SIZE_LINUX_ARMV7} |
 
           ### 🪟 Windows (Self-Hosted Server)
           | Package | Description | Architecture | Size |
           |:---|:---|:---|:---|
-          | **[`nanosrv-${TAG}-windows-x86_64.zip`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/nanosrv-${TAG}-windows-x86_64.zip)** | Windows Server (`nanosrv.exe` + Batch Runner) | x86_64 (64-bit) | **${SIZE_WIN_X64}** |
+          | **[\`nanosrv-${TAG}-windows-x86_64.zip\`](https://github.com/devlopersabbir/nanoctrl/releases/download/${TAG}/nanosrv-${TAG}-windows-x86_64.zip)** | Windows Server (\`nanosrv.exe\` + Batch Runner) | x86_64 (64-bit) | **${SIZE_WIN_X64}** |
 
           ### 🐳 Docker (1-Line Deployment)
           \`\`\`bash
