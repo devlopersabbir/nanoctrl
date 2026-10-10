@@ -17,7 +17,7 @@ INCLUDES = -Isrc/core -Isrc/net -Isrc/screen -Isrc/input -Isrc/crypto -Isrc/plat
 FRAMEWORKS = -framework Cocoa -framework ScreenCaptureKit -framework CoreGraphics -framework CoreMedia -framework CoreVideo -framework Foundation -framework ApplicationServices
 LDFLAGS = -flto -Wl,-dead_strip $(FRAMEWORKS)
 
-SRC_CORE = src/core/protocol.c src/core/session.c
+SRC_CORE = src/core/protocol.c src/core/session.c src/core/config.c
 SRC_NET  = src/net/socket.c src/net/transport.c src/net/server.c
 SRC_SCR  = src/screen/capture.c src/screen/diff.c
 SRC_CRY  = src/crypto/random.c src/crypto/auth.c
@@ -137,15 +137,20 @@ size: $(TARGET) $(SERVER_TARGET)
 # Test targets
 COMMON_TEST_SRCS = $(SRC_CORE) $(SRC_NET) $(SRC_SCR) $(SRC_CRY) src/platform/macos/screen_mac.m src/platform/macos/input_mac.m
 
-test: test_protocol test_diff test_loopback test_relay
+test: test_protocol test_config test_diff test_loopback test_relay
 	@echo "\n=== Running All Unit and Integration Tests ==="
 	@build/test_protocol
+	@build/test_config
 	@build/test_diff
 	@build/test_loopback
 	@build/test_relay
 	@echo "\n>>> ALL TESTS PASSED SUCCESSFULLY! <<<\n"
 
 test_protocol: tests/test_protocol.c src/core/protocol.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(INCLUDES) $^ -o build/$@
+
+test_config: tests/test_config.c src/core/config.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(INCLUDES) $^ -o build/$@
 

@@ -104,7 +104,7 @@ make server
 
 ## Usage
 
-### 1. Native macOS Graphical Interface (Default)
+### 1. Graphical Interface (Default)
 
 Launch without arguments to open the native GUI:
 
@@ -112,24 +112,38 @@ Launch without arguments to open the native GUI:
 ./build/nanoctrl
 ```
 
-* **Share This Mac (Host)**: Displays your unique 9-digit Device ID (e.g. `842 190 345`) and 6-digit PIN (e.g. `582 914`), registers with the relay server, prompts to ACCEPT or REJECT incoming requests, and allows stopping at any time.
+* **Relay Server (Docker / VPS)**: Enter your server address (e.g. `vps.example.com:7443` or Docker container IP). This is **saved automatically** across restarts so you only configure it once!
+* **Share This Mac (Host)**: Displays your unique 9-digit Device ID (e.g. `842 190 345`) and 6-digit PIN (e.g. `582 914`), registers with your configured relay server, prompts to ACCEPT or REJECT incoming requests, and allows stopping at any time.
 * **Control Remote Computer (Controller)**: Enter the target **Device ID** or **Direct IP:Port**, enter the 6-digit PIN, click **[ CONNECT ]**, and control the remote desktop directly in a high-performance viewport window.
 
 ---
 
 ### 2. Command Line Interface (CLI)
 
-#### A. Host via Self-Hosted Relay Server (WAN / Internet)
+#### A. Configure Default Relay Server Once (Persists Across Runs)
+Set your self-hosted Docker / VPS relay server once:
 ```bash
-./build/nanoctrl --host --server-addr vps.example.com:7443 --cli
+./build/nanoctrl --set-server vps.example.com:7443
 ```
-
-#### B. Controller via Self-Hosted Relay Server (WAN / Internet)
+Check active configured server and file location:
 ```bash
-./build/nanoctrl --controller 842190345 582914 --server-addr vps.example.com:7443 --cli
+./build/nanoctrl --get-server
 ```
+*(Config stored at standard OS path: Linux `~/.config/nanoctrl/config`, macOS `~/Library/Application Support/nanoctrl/config`, Windows `%APPDATA%\nanoctrl\config`)*
 
-#### C. Direct LAN Connection (Local Network)
+#### B. Host via Configured Relay Server (WAN / Internet)
+```bash
+./build/nanoctrl --host --cli
+```
+*(Or override server on the fly: `./build/nanoctrl --host --server-addr vps.example.com:7443 --cli`)*
+
+#### C. Controller via Configured Relay Server (WAN / Internet)
+```bash
+./build/nanoctrl --controller 842190345 582914 --cli
+```
+*(Or override server on the fly: `./build/nanoctrl --controller 842190345 582914 --server-addr vps.example.com:7443 --cli`)*
+
+#### D. Direct LAN Connection (Local Network)
 Host on local port:
 ```bash
 ./build/nanoctrl --host 7443 --cli
@@ -140,7 +154,7 @@ Controller connecting directly via LAN IP:
 ./build/nanoctrl --controller 192.168.1.50:7443 582914 --cli
 ```
 
-#### D. Run Built-In Diagnostics
+#### E. Run Built-In Diagnostics
 ```bash
 ./build/nanoctrl --test
 ```

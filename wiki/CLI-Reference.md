@@ -6,17 +6,21 @@
 
 ```text
 Usage:
-  nanoctrl                              Launch native macOS GUI
+  nanoctrl                              Launch native GUI
   nanoctrl --host [port] [options]      Start hosting (sharing screen)
   nanoctrl --controller <target> <pin>  Connect to remote host
   nanoctrl --server [port]              Run embedded relay server
+  nanoctrl --set-server <host:port>     Configure default relay server (persists to config)
+  nanoctrl --get-server                 Display active configured relay server
   nanoctrl --test                       Run built-in self-diagnostics
   nanoctrl --version, -v                Print version
   nanoctrl --help, -h                   Show help
 ```
 
 ### Options:
-* `--server-addr <host:port>`: Connect through a self-hosted relay server.
+* `--set-server <host:port>`: Save relay server address to config on disk.
+* `--get-server`: Display active configured relay server and config file path.
+* `--server-addr <host:port>`: One-off override to connect through a specific relay server.
 * `--pin <6-digit-pin>`: Set a custom 6-digit PIN.
 * `--id <9-digit-id>`: Set a custom 9-digit Device ID.
 * `--auto-accept`: Automatically accept incoming connections without prompting.

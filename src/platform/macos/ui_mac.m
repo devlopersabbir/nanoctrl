@@ -1,5 +1,6 @@
 #import "ui_mac.h"
 #import "../../net/server.h"
+#import "../../core/config.h"
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
 #include <stdio.h>
@@ -430,14 +431,18 @@ void nano_ui_start_controller_gui(const char *host, uint16_t port, const char *p
     [content addSubview:pinField];
     g_ui_app.pinInput = pinField;
 
-    /* Relay Server (Optional) */
+    /* Relay Server (Configured) */
     NSTextField *srvLbl = [NSTextField labelWithString:@"Relay Server:"];
     srvLbl.frame = NSMakeRect(20, 135, 140, 18);
     [content addSubview:srvLbl];
 
+    char cur_srv[128] = "127.0.0.1";
+    uint16_t cur_port = NANO_DEFAULT_PORT;
+    nano_config_get_server(cur_srv, sizeof(cur_srv), &cur_port);
+
     NSTextField *srvField = [[NSTextField alloc] initWithFrame:NSMakeRect(165, 132, 175, 22)];
     srvField.placeholderString = @"127.0.0.1:7443";
-    srvField.stringValue = @"127.0.0.1:7443";
+    srvField.stringValue = [NSString stringWithFormat:@"%s:%u", cur_srv, cur_port];
     [content addSubview:srvField];
     g_ui_app.serverInput = srvField;
 
@@ -509,28 +514,43 @@ void nano_ui_start_controller_relay_gui(const char *server_host, uint16_t server
             return;
         }
 
-        char srvBuf[128] = "127.0.0.1";
-        uint16_t srvPort = NANO_DEFAULT_PORT;
-        NSArray *sparts = [srvStr componentsSeparatedByString:@":"];
-        if (sparts.count > 0 && [sparts[0] length] > 0) {
-            strncpy(srvBuf, [sparts[0] UTF8String], sizeof(srvBuf) - 1);
-        }
-        if (sparts.count > 1) {
-            srvPort = (uint16_t)[sparts[1] intValue];
+        if (srvStr && srvStr.length > 0) {
+            nano_config_set_server_string([srvStr UTF8String]);
         }
 
-        self.statusLabel.stringValue = @"Connecting via relay server...";
+        char srvBuf[128] = "127.0.0.1";
+        uint16_t srvPort = NANO_DEFAULT_PORT;
+        nano_config_get_server(srvBuf, sizeof(srvBuf), &srvPort);
+
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"Connecting via relay %s:%u...", srvBuf, srvPort];
         self.statusLabel.textColor = [NSColor labelColor];
         nano_session_start_controller_relay(self.session, srvBuf, srvPort, target_id, [pinStr UTF8String]);
     }
 }
 
+- (void)onServerChanged:(id)sender {
+    (void)sender;
+    if (self.serverInput && self.serverInput.stringValue.length > 0) {
+        nano_config_set_server_string([self.serverInput.stringValue UTF8String]);
+    }
+}
+
 - (void)launchHost {
+    if (self.serverInput && self.serverInput.stringValue.length > 0) {
+        nano_config_set_server_string([self.serverInput.stringValue UTF8String]);
+    }
+    char srv_host[128] = "127.0.0.1";
+    uint16_t srv_port = NANO_DEFAULT_PORT;
+    nano_config_get_server(srv_host, sizeof(srv_host), &srv_port);
+
     [self.mainWindow close];
-    nano_ui_start_host_relay_gui("127.0.0.1", NANO_DEFAULT_PORT, 0, NULL);
+    nano_ui_start_host_relay_gui(srv_host, srv_port, 0, NULL);
 }
 
 - (void)launchController {
+    if (self.serverInput && self.serverInput.stringValue.length > 0) {
+        nano_config_set_server_string([self.serverInput.stringValue UTF8String]);
+    }
     [self.mainWindow close];
     nano_ui_start_controller_gui(NULL, 0, NULL);
 }
@@ -538,7 +558,7 @@ void nano_ui_start_controller_relay_gui(const char *server_host, uint16_t server
 @end
 
 static void show_launcher_window(void) {
-    NSRect frame = NSMakeRect(0, 0, 340, 240);
+    NSRect frame = NSMakeRect(0, 0, 360, 310);
     NSWindow *win = [[NSWindow alloc] initWithContentRect:frame
                                                 styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable)
                                                   backing:NSBackingStoreBuffered
@@ -549,27 +569,54 @@ static void show_launcher_window(void) {
     NSView *content = win.contentView;
 
     NSTextField *title = [NSTextField labelWithString:@"NANOCTRL"];
-    title.frame = NSMakeRect(20, 180, 300, 28);
+    title.frame = NSMakeRect(20, 260, 320, 28);
     title.font = [NSFont systemFontOfSize:22 weight:NSFontWeightHeavy];
     title.alignment = NSTextAlignmentCenter;
     [content addSubview:title];
 
     NSTextField *sub = [NSTextField labelWithString:@"Tiny Remote Control, Nothing Else."];
-    sub.frame = NSMakeRect(20, 155, 300, 18);
+    sub.frame = NSMakeRect(20, 235, 320, 18);
     sub.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     sub.textColor = [NSColor secondaryLabelColor];
     sub.alignment = NSTextAlignmentCenter;
     [content addSubview:sub];
 
     NSButton *hostBtn = [NSButton buttonWithTitle:@"Share This Mac (Host)" target:g_ui_app action:@selector(launchHost)];
-    hostBtn.frame = NSMakeRect(50, 95, 240, 38);
+    hostBtn.frame = NSMakeRect(50, 180, 260, 36);
     hostBtn.bezelStyle = NSBezelStyleRounded;
     [content addSubview:hostBtn];
 
     NSButton *ctrlBtn = [NSButton buttonWithTitle:@"Control Remote Computer" target:g_ui_app action:@selector(launchController)];
-    ctrlBtn.frame = NSMakeRect(50, 45, 240, 38);
+    ctrlBtn.frame = NSMakeRect(50, 135, 260, 36);
     ctrlBtn.bezelStyle = NSBezelStyleRounded;
     [content addSubview:ctrlBtn];
+
+    /* Relay Server Configuration */
+    NSTextField *srvHeader = [NSTextField labelWithString:@"Relay Server (Docker / VPS):"];
+    srvHeader.frame = NSMakeRect(50, 92, 260, 16);
+    srvHeader.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    srvHeader.textColor = [NSColor secondaryLabelColor];
+    [content addSubview:srvHeader];
+
+    char cur_srv[128] = "127.0.0.1";
+    uint16_t cur_port = NANO_DEFAULT_PORT;
+    nano_config_get_server(cur_srv, sizeof(cur_srv), &cur_port);
+
+    NSTextField *srvField = [[NSTextField alloc] initWithFrame:NSMakeRect(50, 64, 260, 24)];
+    srvField.placeholderString = @"127.0.0.1:7443";
+    srvField.stringValue = [NSString stringWithFormat:@"%s:%u", cur_srv, cur_port];
+    srvField.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
+    srvField.target = g_ui_app;
+    srvField.action = @selector(onServerChanged:);
+    [content addSubview:srvField];
+    g_ui_app.serverInput = srvField;
+
+    NSTextField *hint = [NSTextField labelWithString:@"Both computers must connect to the same server."];
+    hint.frame = NSMakeRect(20, 28, 320, 16);
+    hint.font = [NSFont systemFontOfSize:10];
+    hint.textColor = [NSColor tertiaryLabelColor];
+    hint.alignment = NSTextAlignmentCenter;
+    [content addSubview:hint];
 
     g_ui_app.mainWindow = win;
     [win makeKeyAndOrderFront:nil];

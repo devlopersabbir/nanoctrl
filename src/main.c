@@ -7,6 +7,7 @@
 #include "input/input.h"
 #include "screen/capture.h"
 #include "core/version.h"
+#include "core/config.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,20 +85,22 @@ static void print_version(void) {
 static void print_usage(const char *prog) {
     printf("NANOCTRL v%s - Tiny Remote Control, Nothing Else.\n\n", nano_version_string());
     printf("Usage:\n");
-    printf("  %s                              Launch native macOS GUI\n", prog);
+    printf("  %s                              Launch native GUI\n", prog);
     printf("  %s --host [port] [--pin 123456] [--server-addr host:port] [--id 123456789] [--cli] [--auto-accept]\n", prog);
     printf("  %s --controller <target> <pin> [--server-addr host:port] [--cli]\n", prog);
     printf("  %s --server [port]              Run standalone Rendezvous & Relay server\n", prog);
+    printf("  %s --set-server <host:port>     Configure default relay server (persists across runs)\n", prog);
+    printf("  %s --get-server                 Display active configured relay server\n", prog);
     printf("  %s --test                       Run built-in self-diagnostics\n", prog);
     printf("  %s --version, -v                Print version information\n", prog);
     printf("  %s --help, -h                   Show this help\n\n", prog);
     printf("Examples:\n");
-    printf("  # 1. Run self-hosted relay server on your VPS:\n");
-    printf("  %s --server 7443\n\n", prog);
-    printf("  # 2. Host behind NAT via self-hosted server:\n");
-    printf("  %s --host --server-addr vps.example.com:7443 --cli\n\n", prog);
-    printf("  # 3. Control host via self-hosted server with Device ID & PIN:\n");
-    printf("  %s --controller 842190345 582914 --server-addr vps.example.com:7443 --cli\n\n", prog);
+    printf("  # 1. Configure your self-hosted VPS / Docker relay server once:\n");
+    printf("  %s --set-server vps.example.com:7443\n\n", prog);
+    printf("  # 2. Host behind NAT via configured server:\n");
+    printf("  %s --host --cli\n\n", prog);
+    printf("  # 3. Control host via configured server with Device ID & PIN:\n");
+    printf("  %s --controller 842190345 582914 --cli\n\n", prog);
     printf("  # 4. Direct LAN connection:\n");
     printf("  %s --controller 192.168.1.50:7443 582914 --cli\n", prog);
 }
@@ -135,7 +138,7 @@ static int run_cli_server(uint16_t port) {
     return 0;
 }
 
-static int run_cli_host(uint16_t port, const char *server_addr, uint32_t custom_id, const char *custom_pin) {
+static int run_cli_host(uint16_t port, const char *server_addr, uint32_t custom_id, const char *custom_pin, bool has_port) {
     signal(SIGINT, sigint_handler);
     signal(SIGTERM, sigint_handler);
 
@@ -183,6 +186,35 @@ static int run_cli_host(uint16_t port, const char *server_addr, uint32_t custom_
         printf("  Input:      %s                        \n",
                nano_input_has_permission() ? "Accessibility Trusted" : "Needs Accessibility Permission");
         printf("========================================\n");
+        printf("Press Ctrl+C to terminate host.\n\n");
+    } else if (!has_port) {
+        /* Auto-use configured relay server */
+        char srv_host[128] = "127.0.0.1";
+        uint16_t srv_port = NANO_DEFAULT_PORT;
+        nano_config_get_server(srv_host, sizeof(srv_host), &srv_port);
+
+        if (!nano_session_start_host_relay(s, srv_host, srv_port, custom_id, custom_pin)) {
+            fprintf(stderr, "Error: Failed to start host relay session on %s:%u\n", srv_host, srv_port);
+            nano_session_destroy(s);
+            return 1;
+        }
+
+        char id_str[32];
+        nano_format_device_id(s->device_id, id_str, sizeof(id_str));
+
+        printf("\n========================================\n");
+        printf("               NANOCTRL                 \n");
+        printf("========================================\n");
+        printf("  Role:       HOST (Self-Hosted Relay)  \n");
+        printf("  Server:     %s:%u (Configured)        \n", srv_host, srv_port);
+        printf("  Device ID:  %s                        \n", id_str);
+        printf("  PIN Code:   %.3s %.3s                 \n", s->pin, s->pin + 3);
+        printf("  Screen:     %s                        \n",
+               nano_capture_has_permission() ? "Permission Granted" : "Mock Fallback (Grant in System Settings)");
+        printf("  Input:      %s                        \n",
+               nano_input_has_permission() ? "Accessibility Trusted" : "Needs Accessibility Permission");
+        printf("========================================\n");
+        printf("Share this Device ID & PIN with your controller.\n");
         printf("Press Ctrl+C to terminate host.\n\n");
     } else {
         if (!nano_session_start_host(s, port, custom_pin)) {
@@ -276,6 +308,8 @@ static int run_cli_controller(const char *target_str, const char *server_addr, c
             } else {
                 strncpy(srv_host, server_addr, sizeof(srv_host) - 1);
             }
+        } else {
+            nano_config_get_server(srv_host, sizeof(srv_host), &srv_port);
         }
 
         char id_str[32];
@@ -359,6 +393,17 @@ static int run_diagnostics(void) {
         return 1;
     }
 
+    /* 7. Configuration Subsystem */
+    char cfg_path[1024];
+    if (nano_config_get_path(cfg_path, sizeof(cfg_path))) {
+        char srv_host[128]; uint16_t srv_port = 0;
+        nano_config_get_server(srv_host, sizeof(srv_host), &srv_port);
+        printf("[PASS] Cross-Platform Config (%s:%u)\n", srv_host, srv_port);
+    } else {
+        printf("[FAIL] Config path resolution failed\n");
+        return 1;
+    }
+
     printf("\nAll diagnostics passed successfully!\n");
     return 0;
 }
@@ -370,6 +415,7 @@ int main(int argc, char *argv[]) {
     }
 
     uint16_t port = NANO_DEFAULT_PORT;
+    bool has_custom_port = false;
     const char *custom_pin = NULL;
     const char *target = NULL;
     const char *server_addr = NULL;
@@ -389,6 +435,7 @@ int main(int argc, char *argv[]) {
             is_host = true;
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 port = (uint16_t)atoi(argv[++i]);
+                has_custom_port = true;
             }
         } else if (strcmp(argv[i], "--controller") == 0) {
             is_controller = true;
@@ -402,6 +449,31 @@ int main(int argc, char *argv[]) {
             if (i + 1 < argc) {
                 server_addr = argv[++i];
             }
+        } else if (strcmp(argv[i], "--set-server") == 0) {
+            if (i + 1 < argc) {
+                const char *new_srv = argv[++i];
+                if (nano_config_set_server_string(new_srv)) {
+                    char h[128]; uint16_t p = 0;
+                    nano_config_get_server(h, sizeof(h), &p);
+                    char path[1024]; nano_config_get_path(path, sizeof(path));
+                    printf("[NANOCTRL] Relay Server configured: %s:%u\n", h, p);
+                    printf("[NANOCTRL] Saved to: %s\n", path);
+                    return 0;
+                } else {
+                    fprintf(stderr, "Error: Invalid server address format '%s'. Use host:port (e.g. vps.example.com:7443)\n", new_srv);
+                    return 1;
+                }
+            } else {
+                fprintf(stderr, "Error: --set-server requires an address argument (e.g. vps.example.com:7443)\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--get-server") == 0) {
+            char h[128]; uint16_t p = 0;
+            nano_config_get_server(h, sizeof(h), &p);
+            char path[1024]; nano_config_get_path(path, sizeof(path));
+            printf("[NANOCTRL] Active Relay Server: %s:%u\n", h, p);
+            printf("[NANOCTRL] Config file path:    %s\n", path);
+            return 0;
         } else if (strcmp(argv[i], "--id") == 0) {
             if (i + 1 < argc) {
                 custom_id = nano_parse_device_id(argv[++i]);
@@ -431,7 +503,7 @@ int main(int argc, char *argv[]) {
 
     if (is_host) {
         if (cli_mode) {
-            return run_cli_host(port, server_addr, custom_id, custom_pin);
+            return run_cli_host(port, server_addr, custom_id, custom_pin, has_custom_port);
         } else {
             if (server_addr) {
                 char srv_host[128] = "127.0.0.1";
@@ -446,6 +518,11 @@ int main(int argc, char *argv[]) {
                 } else {
                     strncpy(srv_host, server_addr, sizeof(srv_host) - 1);
                 }
+                return nano_ui_run_host_relay_app(srv_host, srv_port, custom_id, custom_pin);
+            } else if (!has_custom_port) {
+                char srv_host[128] = "127.0.0.1";
+                uint16_t srv_port = NANO_DEFAULT_PORT;
+                nano_config_get_server(srv_host, sizeof(srv_host), &srv_port);
                 return nano_ui_run_host_relay_app(srv_host, srv_port, custom_id, custom_pin);
             } else {
                 return nano_ui_run_host_app(port, custom_pin);
@@ -486,6 +563,8 @@ int main(int argc, char *argv[]) {
                     } else {
                         strncpy(srv_host, server_addr, sizeof(srv_host) - 1);
                     }
+                } else {
+                    nano_config_get_server(srv_host, sizeof(srv_host), &srv_port);
                 }
                 return nano_ui_run_controller_relay_app(srv_host, srv_port, tid, custom_pin);
             }
