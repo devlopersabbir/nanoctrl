@@ -2,11 +2,11 @@
 #define NANO_VERSION_H
 
 #define NANO_VERSION_MAJOR 0
-#define NANO_VERSION_MINOR 2
-#define NANO_VERSION_PATCH 1
+#define NANO_VERSION_MINOR 3
+#define NANO_VERSION_PATCH 0
 
 #ifndef NANO_VERSION_STR
-  #define NANO_VERSION_STR "0.2.1"
+  #define NANO_VERSION_STR "0.3.0"
 #endif
 
 #ifndef NANO_GIT_COMMIT
